@@ -1,0 +1,13 @@
+# Core dependencies
+numpy>=1.21.0
+# faiss-gpu==1.8.0  # Commented out as not working on Windows
+faiss-cpu>=1.8.1  # Using CPU version for compatibility
+annoy>=1.17.0
+sentence-transformers>=2.2.0
+tqdm>=4.65.0
+requests>=2.28.0
+PyYAML>=6.0
+PyPDF2>=3.0.0  # Fallback PDF reader
+
+# MinerU dependencies with vlm-transformers for GPU processing (sglang doesn't support Windows)
+mineru[core]>=2.1.11  # Core functionality and vlm-transformers for VLM acceleration
