@@ -1,0 +1,25 @@
+{
+  "name": "local-rag-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A personal desktop reading room for local PDF question answering",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "postinstall": "node scripts/vendor.cjs",
+    "start": "electron .",
+    "test": "node --check desktop/main.cjs && node --check desktop/preload.cjs && node --check desktop/renderer/app.js && node --check desktop/renderer/i18n.js",
+    "test:e2e": "node tests/electron-smoke.cjs",
+    "pack": "node scripts/package.cjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "44.4.3",
+    "playwright": "^1.58.0",
+    "prettier": "^3.9.8"
+  },
+  "dependencies": {
+    "dompurify": "3.4.15",
+    "katex": "0.18.7",
+    "marked": "18.0.14"
+  }
+}

@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local RAG · 私人閱讀室</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="vendor/katex.css" />
+  </head>
+  <body>
+    <aside class="library-panel">
+      <div class="brand">
+        <div class="brand-mark">lr<span>↗</span></div>
+        <div><strong>Local RAG</strong><span>你的私人閱讀室</span></div>
+      </div>
+      <button id="new-chat" class="primary new-chat">
+        <span>＋</span> 開始新對話 <span class="shortcut">Ctrl N</span>
+      </button>
+      <div class="section-heading">
+        <span>文件庫</span><span id="doc-count" class="count">0</span>
+      </div>
+      <button id="connect-folder" class="folder-connect">
+        ＋ 連接資料夾<small>PDF / EPUB · 包含子資料夾 · 自動更新</small>
+      </button>
+      <div id="folders" class="folder-list"></div>
+      <div class="library-tools">
+        <input
+          id="document-search"
+          type="search"
+          placeholder="搜尋文件名稱…"
+          aria-label="搜尋文件名稱"
+        /><button
+          id="manage-folders"
+          title="管理資料夾"
+          aria-label="管理資料夾"
+        >
+          ⋯
+        </button>
+      </div>
+      <div class="category-tools">
+        <select id="category-scope" aria-label="查詢分類">
+          <option value="">所有分類</option></select
+        ><button id="manage-categories" aria-label="管理分類" title="管理分類">
+          ＋
+        </button>
+      </div>
+      <div class="selection-tools">
+        <button id="select-visible">勾選列表</button
+        ><button id="clear-selection">取消勾選</button>
+      </div>
+      <div id="selection-actions" hidden>
+        <span id="selection-count"></span
+        ><select id="assign-category" aria-label="移至分類"></select
+        ><button id="apply-category">移至分類</button>
+      </div>
+      <button class="scope active" id="all-docs">
+        <span class="folder-icon">▤</span
+        ><span>所有文件<small>從整個文件庫尋找答案</small></span
+        ><span class="scope-dot"></span>
+      </button>
+      <div id="documents" class="document-list"></div>
+      <button id="import" class="import-button">
+        <span>＋</span> 加入個別文件
+        <small>PDF / EPUB · 或拖曳到這裡 · 上限 50 MB</small>
+      </button>
+      <input type="file" id="file-input" accept=".pdf,.epub" multiple hidden />
+      <div class="section-heading conversation-heading">
+        <span>最近的對話</span>
+      </div>
+      <div id="conversations" class="conversations">
+        <p class="muted tiny">對話會保存在這部電腦</p>
+      </div>
+      <div class="sidebar-bottom">
+        <span class="privacy-dot"></span><span>文件與對話儲存在本機</span
+        ><button id="settings-button" aria-label="設定" title="設定">⚙</button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="workspace-header">
+        <div class="breadcrumb">
+          閱讀工作台 <span>/</span> <strong id="scope-name">所有文件</strong>
+        </div>
+        <select id="language" aria-label="介面語言">
+          <option value="zh-Hant">繁體中文</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+        </select>
+        <button id="model-status" class="status-pill">
+          <i></i><span>正在連線…</span>
+        </button>
+      </header>
+      <div id="chat-scroll" class="chat-scroll">
+        <section id="welcome" class="welcome">
+          <div class="eyebrow"><span></span> YOUR KNOWLEDGE, WITH CONTEXT</div>
+          <h1>讓文件，<br />成為你的<span>答案。</span></h1>
+          <p>把論文、筆記與報告放進來。<br />提出問題，跟著引用回到原文。</p>
+          <div class="welcome-rule"></div>
+          <div class="steps">
+            <div><b>01</b><span>加入你的文件</span></div>
+            <div><b>02</b><span>用自然語言提問</span></div>
+            <div><b>03</b><span>查看答案的出處</span></div>
+          </div>
+          <div class="suggestions">
+            <button data-question="這份文件的主要發現是甚麼？請附上引用。">
+              <span>整理重點</span>這份文件的主要發現是甚麼？<b>↗</b></button
+            ><button
+              data-question="請根據文件解釋最重要的概念，並引用相關段落。"
+            >
+              <span>深入理解</span>解釋文件裡最重要的概念<b>↗</b>
+            </button>
+          </div>
+        </section>
+        <section id="messages" class="messages" aria-live="polite"></section>
+      </div>
+      <div class="composer-area">
+        <div id="working" class="working" hidden></div>
+        <form id="composer">
+          <div class="composer-scope">
+            <span>▤</span><span id="composer-scope">所有文件</span
+            ><span class="local-label">LOCAL</span>
+          </div>
+          <div class="reading-mode">
+            <label
+              >閱讀模式
+              <select id="reading-mode">
+                <option value="standard">一般文件</option>
+                <option value="fiction">小說／敘事</option>
+              </select></label
+            ><span id="fiction-note" hidden
+              >補充同章上下文；局部片段不代表全書。</span
+            >
+          </div>
+          <textarea
+            id="question"
+            rows="2"
+            placeholder="向你的文件提問…"
+            aria-label="問題"
+            maxlength="1500"
+          ></textarea>
+          <div class="composer-footer">
+            <span>Enter 傳送 · Shift + Enter 換行</span
+            ><button id="send" class="send" type="submit" aria-label="傳送問題">
+              ↑</button
+            ><button id="stop" type="button" hidden>停止</button>
+          </div>
+        </form>
+        <p class="composer-note">答案可能有誤，請透過引用核對原文。</p>
+      </div>
+    </main>
+
+    <aside class="sources-panel">
+      <div class="sources-heading">
+        <span>參考來源</span><span id="source-count" class="count">0</span>
+      </div>
+      <p class="sources-subtitle">沿著證據，回到原文。</p>
+      <div id="sources">
+        <div class="source-empty">
+          <div class="paper-stack">
+            <div></div>
+            <div><span></span><span></span><span></span><b>[1]</b></div>
+          </div>
+          <h3>每個答案，都有出處</h3>
+          <p>
+            提問後，相關段落會顯示在這裡。<br />點擊引用，即可查看 PDF 原頁。
+          </p>
+        </div>
+      </div>
+      <div class="source-footnote">
+        <span>↳</span> 以原文為依據，保留自己的判斷。
+      </div>
+    </aside>
+
+    <dialog id="settings-dialog">
+      <form id="settings-form">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">PREFERENCES</span>
+            <h2>模型與工作台</h2>
+          </div>
+          <button type="button" class="close-dialog" aria-label="關閉設定">
+            ×
+          </button>
+        </div>
+        <p class="muted">
+          連接本機 LM Studio。模型需先下載，並開啟 Local Server。
+        </p>
+        <label
+          >LM Studio 位址<input
+            name="host"
+            required
+            placeholder="http://127.0.0.1:1234"
+        /></label>
+        <label
+          >回答模型<select id="answer-model-picker" aria-label="選擇回答模型">
+            <option value="">正在讀取本機模型…</option>
+          </select></label
+        >
+        <label class="model-identifier-label"
+          >Model identifier（可自行輸入）<input
+            name="model"
+            required
+            placeholder="例如 qwen3.5-9b"
+            autocomplete="off"
+        /></label>
+        <p class="field-help" id="model-picker-help">
+          選擇已下載的模型，或自行輸入 LM Studio 的 model identifier。
+        </p>
+        <label>Embedding 模型<input name="embedding_model" required /></label>
+        <p class="field-help">
+          文件庫非空時不能更換 embedding 模型，避免索引錯配。
+        </p>
+        <label
+          >Embedding 記憶體<select name="embedding_idle_unload">
+            <option value="true">用完後釋放（閒置 30 秒）</option>
+            <option value="false">保持載入（搜尋較快）</option>
+          </select></label
+        >
+        <p class="field-help">
+          匯入期間會保持載入；下次搜尋自動載回。已建立的索引會保留，回答模型不受影響。
+        </p>
+        <div class="form-row">
+          <label
+            >檢索段落數<input
+              name="top_k"
+              type="number"
+              min="1"
+              max="6"
+              required /></label
+          ><label
+            >回答 token 上限<input
+              name="max_tokens"
+              type="number"
+              min="100"
+              max="2000"
+              required
+          /></label>
+        </div>
+        <label
+          >Temperature<input
+            name="temperature"
+            type="number"
+            min="0"
+            max="1"
+            step="0.1"
+            required
+        /></label>
+        <div class="data-location">
+          <span>本地資料位置</span><code id="data-dir"></code>
+        </div>
+        <div class="dialog-footer">
+          <button type="button" id="check-models" class="secondary">
+            重新檢查連線</button
+          ><button class="primary" type="submit">儲存設定</button>
+        </div>
+        <p id="settings-feedback" role="status"></p>
+      </form>
+    </dialog>
+    <dialog id="pdf-dialog">
+      <div class="dialog-heading">
+        <h2 id="pdf-title">原文</h2>
+        <button class="close-dialog" aria-label="關閉原文">×</button>
+      </div>
+      <iframe id="pdf-viewer" title="PDF 原文"></iframe>
+      <article id="epub-viewer" hidden>
+        <p class="muted">EPUB 章節文字 · 依書籍閱讀順序，並非固定頁碼</p>
+        <div id="epub-text"></div>
+      </article>
+    </dialog>
+    <dialog id="folders-dialog">
+      <div class="dialog-heading">
+        <h2>已連接的資料夾</h2>
+        <button class="close-dialog" aria-label="關閉資料夾管理">×</button>
+      </div>
+      <p class="muted">
+        app 開啟時約每 10
+        秒檢查，待檔案穩定後處理。重新開啟會補掃。移走原檔或停止連接，都會保留已匯入的副本。
+      </p>
+      <div id="folder-details"></div>
+      <div class="dialog-footer">
+        <button id="scan-folders" class="secondary">立即檢查</button
+        ><button id="add-folder" class="primary">連接資料夾</button>
+      </div>
+    </dialog>
+    <dialog id="confirm-dialog">
+      <h2>刪除這份文件？</h2>
+      <p id="confirm-name"></p>
+      <p class="muted">
+        會刪除本地副本和搜尋索引，原始文件不受影響。舊對話的回答文字會保留。資料夾內相同版本不會再次自動加入；原檔更新後會重新匯入。
+      </p>
+      <div class="dialog-footer">
+        <button id="cancel-delete" class="secondary">取消</button
+        ><button id="confirm-delete" class="danger">刪除文件</button>
+      </div>
+    </dialog>
+    <dialog id="categories-dialog">
+      <div class="dialog-heading">
+        <h2>管理分類</h2>
+        <button class="close-dialog" aria-label="關閉分類管理">×</button>
+      </div>
+      <p class="muted">
+        例如作品系列、小說、論文或工作資料。先勾選文件，再移至分類。
+      </p>
+      <form id="category-form">
+        <input
+          name="name"
+          maxlength="80"
+          required
+          placeholder="新分類名稱"
+          aria-label="新分類名稱"
+        /><button class="primary" type="submit">新增分類</button>
+      </form>
+      <div id="category-list"></div>
+      <p class="muted">移除分類只會將文件移回「未分類」，不會刪除文件。</p>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+    <div id="drop-overlay" hidden>
+      <span>＋</span>
+      <h2>把 PDF / EPUB 放進你的閱讀室</h2>
+      <p>文件只會儲存在這部電腦</p>
+    </div>
+    <script src="vendor/marked.js"></script>
+    <script src="vendor/purify.js"></script>
+    <script src="vendor/katex.js"></script>
+    <script src="vendor/auto-render.js"></script>
+    <script src="i18n.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

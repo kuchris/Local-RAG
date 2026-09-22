@@ -232,6 +232,8 @@ class TextSplitter:
     """Split text into chunks with overlap"""
     
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        if not 0 <= chunk_overlap < chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
     
@@ -272,6 +274,8 @@ class TextSplitter:
                     "metadata": chunk_metadata
                 })
             
+            if end == text_length:
+                break
             # Update start position for next chunk
             previous_start = start
             start = end - self.chunk_overlap
@@ -326,7 +330,7 @@ class FAISSVectorStore:
         self.index = None
         self.documents = []
         self.index_path = Path(config.vector_db_dir) / "faiss.index"
-        self.docs_path = Path(config.vector_db_dir) / "documents.pkl"
+        self.docs_path = Path(config.vector_db_dir) / "faiss_documents.pkl"
 
     def create_index(self, embedding_dim: int):
         logger.info(f"FAISS: Creating new CPU index of type: {self.config.faiss_index_type}")
@@ -370,6 +374,10 @@ class FAISSVectorStore:
             with open(self.docs_path, 'wb') as f: pickle.dump(self.documents, f)
             logger.info("FAISS: Vector store saved successfully.")
 
+    def build_index(self):
+        """FAISS indices are ready immediately after add_documents."""
+        return None
+
     def load(self):
         if self.index_path.exists() and self.docs_path.exists():
             self.index = faiss.read_index(str(self.index_path))
@@ -391,6 +399,7 @@ class AnnoyVectorStore:
         self.index = None
         self.documents = []
         self.embedding_dim = None
+        self.built = False
         self.index_path = Path(config.vector_db_dir) / "annoy_index.ann"
         self.docs_path = Path(config.vector_db_dir) / "documents.pkl"
         self.meta_path = Path(config.vector_db_dir) / "index_meta.pkl"  # To store embedding dimension
@@ -400,12 +409,19 @@ class AnnoyVectorStore:
         logger.info(f"Annoy: Creating new index with {embedding_dim} dimensions")
         self.embedding_dim = embedding_dim
         self.index = AnnoyIndex(embedding_dim, 'angular')  # Using angular distance
+        self.built = False
         
     def add_documents(self, embeddings: np.ndarray, documents: List[Dict]):
         """Add documents to the vector store"""
         # If this is the first time adding documents, create the index
         if self.index is None:
             self.create_index(embeddings.shape[1])
+        elif self.built:
+            # A loaded/built Annoy index is immutable; rebuild from its vectors.
+            previous = [self.index.get_item_vector(i) for i in range(len(self.documents))]
+            self.create_index(self.embedding_dim)
+            for i, vector in enumerate(previous):
+                self.index.add_item(i, vector)
             
         # Add vectors to the index
         start_id = len(self.documents)
@@ -417,11 +433,13 @@ class AnnoyVectorStore:
         
         logger.info(f"Annoy: Added {len(documents)} documents to index (total: {len(self.documents)}).")
 
-    def build_index(self, n_trees: int = 10):
+    def build_index(self, n_trees: int = None):
         """Build the Annoy index (needs to be called after adding all documents)"""
-        if self.index is not None:
+        if self.index is not None and not self.built:
+            n_trees = n_trees or self.config.n_trees
             logger.info(f"Annoy: Building index with {n_trees} trees")
             self.index.build(n_trees)
+            self.built = True
             
     def search(self, query_embedding: np.ndarray, k: int = None) -> List[Dict]:
         """Search for similar documents"""
@@ -474,6 +492,7 @@ class AnnoyVectorStore:
             # Create and load index
             self.index = AnnoyIndex(self.embedding_dim, 'angular')
             self.index.load(str(self.index_path))
+            self.built = True
             
             # Load documents
             with open(self.docs_path, 'rb') as f:
@@ -516,6 +535,7 @@ class LMStudioClient:
         
         # Prepare request
         payload = {
+            "model": self.config.model_name,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
@@ -527,7 +547,8 @@ class LMStudioClient:
             response = requests.post(
                 f"{self.base_url}{self.endpoint}",
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=(5, 180)
             )
             
             if response.status_code == 200:
@@ -576,6 +597,11 @@ class RAGPipeline:
     def process_pdf(self, pdf_path: str):
         """Process a single PDF and add to vector store"""
         logger.info(f"Processing PDF: {pdf_path}")
+
+        document_hash = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
+        if any(doc.get("metadata", {}).get("document_hash") == document_hash for doc in self.vector_store.documents):
+            logger.info("PDF already indexed, skipping")
+            return
         
         # Extract content with MinerU
         extracted = self.mineru_processor.process_pdf(pdf_path)
@@ -589,6 +615,7 @@ class RAGPipeline:
             extracted["markdown"],
             metadata={
                 "source": extracted["source"],
+                "document_hash": document_hash,
                 "extraction_date": extracted["extraction_date"]
             }
         )
@@ -691,9 +718,16 @@ class RAGPipeline:
     
     def clear_index(self):
         """Clear the vector store"""
+        if isinstance(self.vector_store, AnnoyVectorStore) and self.vector_store.index is not None:
+            self.vector_store.index.unload()
         self.vector_store.index = None
         self.vector_store.documents = []
         self.vector_store.embedding_dim = None
+        self.vector_store.built = False
+        for attribute in ("index_path", "docs_path", "meta_path"):
+            path = getattr(self.vector_store, attribute, None)
+            if path is not None:
+                path.unlink(missing_ok=True)
         logger.info("Vector store cleared")
 
 
@@ -701,11 +735,6 @@ class RAGPipeline:
 def main():
     """Main CLI interface"""
     import argparse
-    
-    # Debug prints
-    print(f"DEBUG: Running with Python interpreter: {sys.executable}")
-    print(f"DEBUG: Annoy support available: {ANNOY_AVAILABLE}")
-    print(f"DEBUG: System PATH: {os.environ.get('PATH')}")
     
     parser = argparse.ArgumentParser(description="Local RAG System")
     parser.add_argument("--action", choices=["build", "query", "add", "clear"], required=True,
@@ -715,11 +744,12 @@ def main():
     parser.add_argument("--question", help="Question to ask (for query)")
     parser.add_argument("--k", type=int, default=5, help="Number of documents to retrieve")
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM generation")
+    parser.add_argument("--config", default=str(Path(__file__).with_name("config.yaml")))
     
     args = parser.parse_args()
     
     # Initialize RAG pipeline
-    config = RAGConfig()
+    config = load_config(args.config)
     rag = RAGPipeline(config)
     
     if args.action == "build":
@@ -759,14 +789,14 @@ def main():
         rag.clear_index()
         print("Index cleared")
 
-# Load config from YAML file
-try:
-    with open('config.yaml', 'r') as f:
-        config_dict = yaml.safe_load(f)
-        config = RAGConfig(**config_dict)
-except FileNotFoundError:
-    print("config.yaml not found, using default configuration")
-    config = RAGConfig()
+def load_config(path):
+    config_path = Path(path).resolve()
+    with config_path.open(encoding="utf-8") as handle:
+        values = yaml.safe_load(handle) or {}
+    for name in ("pdf_dir", "processed_dir", "vector_db_dir", "mineru_output_dir"):
+        if name in values and not Path(values[name]).is_absolute():
+            values[name] = str(config_path.parent / values[name])
+    return RAGConfig(**values)
 
 if __name__ == "__main__":
     main()
