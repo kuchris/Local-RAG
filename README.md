@@ -6,6 +6,10 @@ Connect a folder, choose what to search, and ask questions with citations back t
 
 The interface supports **繁體中文 · English · 日本語**. The answer model is prompted to respond in the language of your question.
 
+![Local RAG desktop app showing an English answer and its source excerpt](docs/images/local-rag-app.png)
+
+*Example screen with an English answer grounded in a fictional EPUB.*
+
 ## Features
 
 - **Folder imports:** watch subfolders for new and changed PDFs and EPUBs, or add individual files with the picker and drag and drop.
