@@ -19,7 +19,8 @@ packager({
   overwrite: true,
   asar: false,
   ignore: [
-    /^\/(data|models|artifacts|tests|dist|\.git|\.venv|__pycache__|\.pytest_cache)(\/|$)/,
+    // The Electron main process only needs built-in modules; the UI is bundled into frontend/dist.
+    /^\/(data|models|artifacts|tests|dist|docs|node_modules|\.claude|\.git|\.venv|__pycache__|\.pytest_cache)(\/|$)/,
     /^\/frontend\/(?!dist(\/|$))/,
     /__pycache__/,
   ],
