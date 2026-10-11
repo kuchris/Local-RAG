@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
-from backend.core import Library, split_text, needs_vision
+from backend.core import Library, needs_vision, split_text
 from backend.server import create_app
 
 

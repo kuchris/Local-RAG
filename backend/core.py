@@ -44,7 +44,16 @@ DEFAULTS = {
 }
 
 
+def estimate_tokens(text: str) -> float:
+    """Conservative token count for Qwen/Gemma tokenizers: CJK characters ~0.7, other characters ~0.23."""
+    wide = sum(1 for c in text if ord(c) >= 0x2E80)
+    return 0.8 * wide + 0.3 * (len(text) - wide)
+
+
 def split_text(text: str, size: int = 900, overlap: int = 120):
+    # Character-based passages ending at paragraph or sentence breaks. Sentence packing by tokens
+    # (350 and 650) and book/chapter title prefixes were measured with scripts/eval_retrieval.py
+    # and did not beat this on a 5,529-passage novel library.
     if not 0 <= overlap < size:
         raise ValueError("overlap must be smaller than chunk size")
     start = 0
@@ -443,7 +452,7 @@ class Library:
         return sections, 'pypdf+qwen-vision' if used_vision else 'pypdf'
 
     def start_reindex(self, embedding_model):
-        """Queue a rebuild of every stored chunk's vector with another embedding model."""
+        """Queue a rebuild of every passage: re-split stored sections and embed them with `embedding_model`."""
         with self.write_lock:
             if self.reindexing['status'] == 'running':
                 raise ValueError('索引正在重建中，請稍候。')
@@ -461,19 +470,39 @@ class Library:
         settings = self.settings() | {'embedding_model': embedding_model}
         session = self.client.memory.session() if isinstance(self.client, ModelClient) else nullcontext()
         try:
+            # Stored section text is split again, so no PDF is re-read and no page transcribed again.
+            # Documents without stored sections keep their passages and are only re-embedded.
+            plan = []
+            with self.connect() as db:
+                for doc in db.execute("SELECT id FROM documents WHERE status='ready'").fetchall():
+                    sections = db.execute('SELECT number, text FROM sections WHERE document_id=? ORDER BY number',
+                                          (doc['id'],)).fetchall()
+                    if sections:
+                        for s in sections:
+                            plan.extend((doc['id'], s['number'], part) for part in split_text(s['text']))
+                    else:
+                        plan.extend((doc['id'], r['page'], r['text']) for r in db.execute(
+                            'SELECT page, text FROM chunks WHERE document_id=? ORDER BY id', (doc['id'],)))
+            self.reindexing['total'] = len(plan)
+            vectors = []
             with session:
-                with self.connect() as db:
-                    rows = db.execute('SELECT id,text FROM chunks ORDER BY id').fetchall()
-                vectors = []
-                for offset in range(0, len(rows), 32):
-                    batch = rows[offset:offset + 32]
-                    embedded = self.client.embed([r['text'] for r in batch], settings)
-                    vectors.extend((v.astype(np.float32).tobytes(), r['id']) for r, v in zip(batch, embedded))
+                for offset in range(0, len(plan), 32):
+                    batch = plan[offset:offset + 32]
+                    embedded = self.client.embed([p[2] for p in batch], settings)
+                    vectors.extend(v.astype(np.float32).tobytes() for v in embedded)
                     self.reindexing['done'] = len(vectors)
             # Swap everything in one transaction; a failure above leaves the old index untouched.
-            # Imports share this worker, so no chunks appear meanwhile; deleted ones just match no row.
+            # Imports share this worker, so no documents appear meanwhile; deleted ones are skipped.
             with self.write_lock, self.connect() as db:
-                db.executemany('UPDATE chunks SET vector=? WHERE id=?', vectors)
+                present = {r[0] for r in db.execute('SELECT id FROM documents')}
+                rows = [(d, page, text, vector) for (d, page, text), vector in zip(plan, vectors) if d in present]
+                for doc_id in {r[0] for r in rows}:
+                    db.execute('DELETE FROM chunks WHERE document_id=?', (doc_id,))
+                db.executemany('INSERT INTO chunks(document_id,page,text,vector) VALUES (?,?,?,?)', rows)
+                for doc_id in {r[0] for r in rows}:
+                    index_terms(db, db.execute('SELECT id, text FROM chunks WHERE document_id=?', (doc_id,)).fetchall())
+                    db.execute('UPDATE documents SET chunks=(SELECT count(*) FROM chunks WHERE document_id=?) WHERE id=?',
+                               (doc_id, doc_id))
                 db.execute('UPDATE documents SET embedding_model=?', (embedding_model,))
                 saved = json.loads(db.execute('SELECT data FROM settings WHERE id=1').fetchone()[0])
                 db.execute('UPDATE settings SET data=? WHERE id=1', (json.dumps(saved | {'embedding_model': embedding_model}),))
