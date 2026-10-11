@@ -20,6 +20,7 @@ packager({
   asar: false,
   ignore: [
     /^\/(data|models|artifacts|tests|dist|\.git|\.venv|__pycache__|\.pytest_cache)(\/|$)/,
+    /^\/frontend\/(?!dist(\/|$))/,
     /__pycache__/,
   ],
   prune: true,

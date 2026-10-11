@@ -129,13 +129,28 @@ The backend uses a random loopback port with a per-launch session secret. The re
 ## Development
 
 ```text
-Electron renderer → authenticated local FastAPI backend
-                         ├─ PDF / EPUB extraction and folder monitoring
-                         ├─ SQLite: documents, vectors and conversations
-                         └─ llama-server ×2: answers + PDF vision, embeddings
+React UI (Electron window) → authenticated local FastAPI backend
+                               ├─ PDF / EPUB extraction and folder monitoring
+                               ├─ SQLite: documents, vectors and conversations
+                               └─ llama-server ×2: answers + PDF vision, embeddings
 ```
 
-The desktop implementation lives in `desktop/` and `backend/`. Imports run through one background worker; one answer is generated at a time.
+| Folder | Contents |
+| --- | --- |
+| `frontend/` | React + TypeScript + Tailwind UI, built by Vite into `frontend/dist` |
+| `backend/` | FastAPI server, library, folder sync and the `llama-server` runtime (`backend/llama.py`) |
+| `desktop/` | Electron main process and preload bridge |
+
+Imports run through one background worker; one answer is generated at a time. `npm start` builds the UI, then opens Electron.
+
+To work on the UI with hot reload, run a backend with a fixed port and token, then the Vite dev server, which proxies `/api` and adds the token:
+
+```powershell
+$env:LOCAL_RAG_TOKEN = 'dev'; .venv\Scripts\python.exe -m backend.server --data-dir artifacts\dev-library --port 8765
+npm run dev:ui
+```
+
+Open `http://localhost:5173`. Folder connection needs the Electron app; file import works through drag and drop.
 
 ### Tests
 
@@ -147,18 +162,18 @@ uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 npm test
 ```
 
-Python tests cover persistence, imports, category scope, folder updates, embedding lifecycle and prompt limits. `npm test` checks JavaScript syntax.
+Python tests cover persistence, imports, category scope, folder updates, the llama.cpp runtime, embedding lifecycle and prompt limits. `npm test` type-checks the UI and checks the Electron scripts.
 
-For integration tests, put the configured models in `models/`. The category test also needs Playwright's Chromium browser:
+End-to-end tests need the configured models in `models/` and a built UI (`npm run build:ui`):
 
 ```powershell
-npx playwright install chromium
-node tests/electron-smoke.cjs --live
-node tests/electron-folders.cjs --live
-node tests/electron-categories.cjs --live
+node tests/e2e/smoke.cjs --live
+node tests/e2e/folders.cjs --live
+node tests/e2e/categories.cjs --live
+node tests/e2e/memory.cjs
 ```
 
-Tests generate fictional PDF/EPUB fixtures and use isolated libraries under `artifacts/`. `--live` checks generated answers as well as imports and UI behavior. Add `--packaged` to test a built executable. These are functional checks, not a general answer-quality benchmark.
+They generate fictional PDF/EPUB fixtures and use isolated libraries under `artifacts/`. `--live` also checks generated answers. Add `--packaged` to test the portable build, or `--browser` to run the same checks against the backend in headless Chromium (`npx playwright install chromium`) where Electron cannot start. These are functional checks, not an answer-quality benchmark.
 
 ### Portable build
 

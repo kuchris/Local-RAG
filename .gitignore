@@ -11,7 +11,6 @@ __pycache__/
 /bin/
 /models/
 *.gguf
-/desktop/renderer/vendor/
 
 # Personal libraries, imported documents and generated indexes
 /data/
@@ -35,3 +34,4 @@ __pycache__/
 *.pem
 *.key
 config.local.*
+/frontend/dist/

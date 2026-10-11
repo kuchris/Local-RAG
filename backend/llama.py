@@ -219,7 +219,8 @@ class LlamaRuntime:
             self._stop(role)
 
     def _stop(self, role: str):
-        instance = self.instances.pop(role, None)
+        # Report the role as unloaded only after the process (and its VRAM) is gone.
+        instance = self.instances.get(role)
         if instance and instance.alive():
             instance.process.terminate()
             try:
@@ -227,6 +228,7 @@ class LlamaRuntime:
             except subprocess.TimeoutExpired:
                 instance.process.kill()
                 instance.process.wait(5)
+        self.instances.pop(role, None)
 
     def close(self):
         for role in self.locks:

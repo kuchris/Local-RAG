@@ -356,7 +356,9 @@ def create_app(data_dir: Path, token: str, client=None, models_dir: Path | None 
 
         return StreamingResponse(events(), media_type="application/x-ndjson")
 
-    app.mount("/", StaticFiles(directory=Path(__file__).resolve().parents[1] / "desktop" / "renderer", html=True), name="ui")
+    ui = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    if ui.is_dir():  # Built by `npm run build:ui`; API-only otherwise (tests, `npm run dev:ui`).
+        app.mount("/", StaticFiles(directory=ui, html=True), name="ui")
     return app
 
 

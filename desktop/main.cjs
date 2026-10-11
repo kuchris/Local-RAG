@@ -1,4 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  nativeTheme,
+  session,
+} = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -125,8 +132,8 @@ async function createWindow() {
     height: 960,
     minWidth: 1000,
     minHeight: 700,
-    title: "Local RAG · 私人閱讀室",
-    backgroundColor: "#f6f5f0",
+    title: "Local RAG",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#18181b" : "#ffffff",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
