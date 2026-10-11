@@ -28,6 +28,9 @@ LEGACY_MODELS = {
     "text-embedding-qwen3-embedding-0.6b": "Qwen3-Embedding-0.6B-Q8_0",
 }
 
+# Weight of the keyword (BM25) ranking relative to the vector ranking in reciprocal rank fusion.
+LEXICAL_WEIGHT = 1.0
+
 DEFAULTS = {
     "model": "Qwen3.5-9B-Q4_K_M",
     "embedding_model": "embeddinggemma-2-Q8_0",
@@ -58,8 +61,23 @@ def split_text(text: str, size: int = 900, overlap: int = 120):
         start = max(start + 1, end - overlap)
 
 
-def tokens(text: str):
-    return set(re.findall(r"[a-z0-9]+|[\u3400-\u9fff]", text.lower()))
+CJK = "\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff"
+
+
+def search_terms(text: str) -> list[str]:
+    """Keyword terms for BM25: lowercase words, and overlapping character pairs for Chinese/Japanese."""
+    terms = []
+    for run in re.findall(rf"[a-z0-9]{{2,}}|[{CJK}]+", unicodedata.normalize("NFKC", text).lower()):
+        if run[0] < "\u3040":
+            terms.append(run)
+        else:
+            terms.extend([run] if len(run) == 1 else (run[i:i + 2] for i in range(len(run) - 1)))
+    return terms
+
+
+def index_terms(db, chunk_ids_and_texts):
+    db.executemany("INSERT INTO chunk_terms(rowid, terms) VALUES (?,?)",
+                   ((identifier, " ".join(search_terms(text))) for identifier, text in chunk_ids_and_texts))
 
 
 def needs_vision(text: str) -> bool:
@@ -170,7 +188,16 @@ class Library:
                 PRIMARY KEY(document_id,number));
             CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE);
             CREATE TABLE IF NOT EXISTS preferences (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunk_terms USING fts5(terms, tokenize='unicode61');
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunk_terms_vocab USING fts5vocab(chunk_terms, 'row');
+            CREATE TRIGGER IF NOT EXISTS chunk_terms_delete AFTER DELETE ON chunks BEGIN
+                DELETE FROM chunk_terms WHERE rowid = old.id;
+            END;
             """)
+            # Build the keyword index for libraries created before it existed.
+            if db.execute("SELECT count(*) FROM chunk_terms").fetchone()[0] != db.execute("SELECT count(*) FROM chunks").fetchone()[0]:
+                db.execute("DELETE FROM chunk_terms")
+                index_terms(db, db.execute("SELECT id, text FROM chunks").fetchall())
             columns = {r['name'] for r in db.execute('PRAGMA table_info(documents)')}
             for name, definition in [('format', "TEXT NOT NULL DEFAULT 'pdf'"), ('managed', 'INTEGER NOT NULL DEFAULT 0'), ('category_id', 'TEXT REFERENCES categories(id) ON DELETE SET NULL')]:
                 if name not in columns:
@@ -372,6 +399,7 @@ class Library:
                 db.execute('DELETE FROM sections WHERE document_id=?', (doc_id,))
                 db.executemany('INSERT INTO sections VALUES (?,?,?,?)', normalized)
                 db.executemany("INSERT INTO chunks(document_id,page,text,vector) VALUES (?,?,?,?)", embedded)
+                index_terms(db, db.execute("SELECT id, text FROM chunks WHERE document_id=?", (doc_id,)).fetchall())
                 db.execute("UPDATE documents SET status='ready',progress=100,chunks=?,error=NULL,embedding_model=? WHERE id=?",
                            (len(chunks), settings['embedding_model'], doc_id))
         except Exception as error:
@@ -463,6 +491,20 @@ class Library:
                 db.execute("UPDATE messages SET sources=? WHERE id=?", (json.dumps(sources), row["id"]))
         path.unlink(missing_ok=True)
 
+    def keyword_scores(self, question, limit=1000) -> tuple[dict[int, float], float]:
+        """BM25 scores (higher is better) of the best keyword matches, and the share of the
+        question's terms that occur anywhere in the library (low for e.g. English questions about Chinese books)."""
+        terms = list(dict.fromkeys(search_terms(question)))[:64]
+        if not terms:
+            return {}, 0.0
+        query = " OR ".join('"' + term + '"' for term in terms)
+        marks = ",".join("?" for _ in terms)
+        with self.connect() as db:
+            rows = db.execute("SELECT rowid, -bm25(chunk_terms) FROM chunk_terms WHERE chunk_terms MATCH ? "
+                              "ORDER BY bm25(chunk_terms) LIMIT ?", (query, limit)).fetchall()
+            known = db.execute(f"SELECT count(*) FROM chunk_terms_vocab WHERE term IN ({marks})", terms).fetchone()[0]
+        return {identifier: score for identifier, score in rows}, known / len(terms)
+
     def retrieve(self, question, document_ids, settings, reading_mode='standard'):
         if self.reindexing['status'] == 'running':
             raise ValueError('索引正在重建中，完成後才能提問。')
@@ -484,15 +526,17 @@ class Library:
         if matrix.shape[1] != len(vector):
             raise ValueError("Embedding 維度改變，請重新匯入文件。")
         semantic = matrix @ vector
-        keywords = tokens(question)
-        lexical = np.array([len(keywords & tokens(r["text"])) / max(1, len(keywords)) for r in rows])
+        keyword, coverage = self.keyword_scores(question)
+        lexical = np.array([keyword.get(r["id"], 0.0) for r in rows])
         # Reciprocal rank fusion avoids treating different scores as probabilities.
+        # Only passages that match a keyword get a keyword rank, and keywords count only as far
+        # as the question's words exist in the library at all.
         scores = np.zeros(len(rows))
-        for values in (semantic, lexical):
-            for rank, index in enumerate(np.argsort(-values), 1):
-                if values is lexical and values[index] == 0:
-                    continue
-                scores[index] += 1 / (60 + rank)
+        for values, weight in ((semantic, 1.0), (lexical, LEXICAL_WEIGHT * coverage)):
+            order = np.argsort(-values)
+            if values is lexical:
+                order = order[values[order] > 0]
+            scores[order] += weight / (60 + np.arange(1, len(order) + 1))
         selected = np.argsort(-scores)[:settings["top_k"]]
         sources = [{"id": rank, "chunk_id": rows[i]["id"], "document_id": rows[i]["document_id"],
                  "name": rows[i]["name"], "page": rows[i]["page"], "text": rows[i]["text"],

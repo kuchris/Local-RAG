@@ -25,7 +25,7 @@ import numpy as np
 
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
-from backend.core import Library, ModelClient, tokens  # noqa: E402
+from backend.core import Library, ModelClient  # noqa: E402
 from backend.llama import LlamaRuntime, default_paths  # noqa: E402
 
 PROMPT = """Below is a passage from a book or document. Write ONE question that a reader could ask and that this passage answers specifically.
@@ -78,18 +78,17 @@ def ranks(library: Library, settings: dict, item: dict, cache: dict) -> dict[str
                                             if s["document_id"] == item["document_id"] and s["page"] == item["page"]), None)}
     if "matrix" not in cache:
         with library.connect() as db:
-            rows = db.execute("SELECT c.id, c.text, c.vector FROM chunks c JOIN documents d ON d.id = c.document_id "
+            rows = db.execute("SELECT c.id, c.vector FROM chunks c JOIN documents d ON d.id = c.document_id "
                               "WHERE d.status = 'ready'").fetchall()
         cache["ids"] = np.array([r["id"] for r in rows])
         cache["matrix"] = np.stack([np.frombuffer(r["vector"], dtype=np.float32) for r in rows])
-        cache["tokens"] = [tokens(r["text"]) for r in rows]
     target = int(np.where(cache["ids"] == item["chunk_id"])[0][0])
     vector = library.client.embed([item["question"]], settings, query=True)[0]
     semantic = cache["matrix"] @ vector
     result["vector"] = int((semantic > semantic[target]).sum()) + 1
-    keywords = tokens(item["question"])
-    lexical = np.array([len(keywords & t) / max(1, len(keywords)) for t in cache["tokens"]])
-    result["keywords"] = int((lexical > lexical[target]).sum()) + 1
+    keyword, _ = library.keyword_scores(item["question"])
+    lexical = np.array([keyword.get(int(i), 0.0) for i in cache["ids"]])
+    result["keywords"] = int((lexical > lexical[target]).sum()) + 1 if lexical[target] > 0 else None
     return result
 
 

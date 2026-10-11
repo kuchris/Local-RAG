@@ -215,3 +215,31 @@ def test_questions_wait_for_reindex(tmp_path):
     with pytest.raises(ValueError, match='重建'):
         library.retrieve('anything', None, library.settings())
     library.close()
+
+
+def test_keyword_index_follows_chunks_and_matches_cjk(tmp_path):
+    from backend.core import search_terms
+    assert search_terms('綾小路と堀北, Orchid 2026!') == ['綾小', '小路', '路と', 'と堀', '堀北', 'orchid', '2026']
+    library = Library(tmp_path, DeterministicEmbeddings())
+    doc = wait_ready(library, library.enqueue('notes.pdf', pdf_bytes('Orchid budget 4200', second_page='Timer measured'))['id'])
+    with library.connect() as db:
+        assert db.execute('SELECT count(*) FROM chunk_terms').fetchone()[0] == doc['chunks']
+    scores, coverage = library.keyword_scores('orchid budget')
+    assert len(scores) == 1 and coverage == 1.0
+    assert library.keyword_scores('orchid zebra')[1] == 0.5
+    assert library.keyword_scores('???') == ({}, 0.0)
+    library.delete(doc['id'])
+    with library.connect() as db:
+        assert db.execute('SELECT count(*) FROM chunk_terms').fetchone()[0] == 0
+    library.close()
+
+
+def test_keyword_index_is_backfilled_for_existing_libraries(tmp_path):
+    library = Library(tmp_path, DeterministicEmbeddings())
+    wait_ready(library, library.enqueue('notes.pdf', pdf_bytes())['id'])
+    with library.connect() as db:
+        db.execute('DELETE FROM chunk_terms')
+    library.close()
+    library = Library(tmp_path, DeterministicEmbeddings())
+    assert library.keyword_scores('orchid')[0]
+    library.close()
