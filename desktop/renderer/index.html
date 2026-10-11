@@ -183,14 +183,8 @@
           </button>
         </div>
         <p class="muted">
-          連接本機 LM Studio。模型需先下載，並開啟 Local Server。
+          App 會自動啟動 llama.cpp。模型請放在 models 資料夾。
         </p>
-        <label
-          >LM Studio 位址<input
-            name="host"
-            required
-            placeholder="http://127.0.0.1:1234"
-        /></label>
         <label
           >回答模型<select id="answer-model-picker" aria-label="選擇回答模型">
             <option value="">正在讀取本機模型…</option>
@@ -204,7 +198,7 @@
             autocomplete="off"
         /></label>
         <p class="field-help" id="model-picker-help">
-          選擇已下載的模型，或自行輸入 LM Studio 的 model identifier。
+          模型 ID 是 models 資料夾內 GGUF 的檔名（不含 .gguf）。
         </p>
         <label>Embedding 模型<input name="embedding_model" required /></label>
         <p class="field-help">

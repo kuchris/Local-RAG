@@ -17,6 +17,15 @@ const token = crypto.randomBytes(32).toString("hex");
 const dataDir =
   process.env.LOCAL_RAG_DATA_DIR ||
   path.join(app.getPath("userData"), "library");
+// A portable build keeps models beside the executable; development uses the repository folder.
+const modelsDir =
+  process.env.LOCAL_RAG_MODELS_DIR ||
+  (app.isPackaged
+    ? path.join(path.dirname(process.execPath), "models")
+    : path.join(root, "models"));
+const llamaServer =
+  process.env.LOCAL_RAG_LLAMA_SERVER ||
+  path.join(root, "bin", "llama", "llama-server.exe");
 
 async function startBackend() {
   const bundled = path.join(root, "runtime", "python.exe");
@@ -36,7 +45,17 @@ async function startBackend() {
   });
   backend = spawn(
     python,
-    ["-u", "-m", "backend.server", "--data-dir", dataDir],
+    [
+      "-u",
+      "-m",
+      "backend.server",
+      "--data-dir",
+      dataDir,
+      "--models-dir",
+      modelsDir,
+      "--llama-server",
+      llamaServer,
+    ],
     {
       cwd: root,
       windowsHide: true,
@@ -226,10 +245,10 @@ app.on("before-quit", (event) => {
   (async () => {
     try {
       if (origin)
-        await fetch(origin + "/api/release-embedding", {
+        await fetch(origin + "/api/shutdown", {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(15000),
         });
     } catch {
     } finally {

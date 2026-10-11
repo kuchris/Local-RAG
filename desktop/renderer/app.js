@@ -924,13 +924,13 @@ async function refreshModels() {
     result.online && result.configured_available,
   );
   status.querySelector("span").textContent = !result.online
-    ? t("LM Studio 未連線")
+    ? t("找不到 llama-server")
     : !result.configured_available
       ? t("模型尚未準備好")
       : state.settings.model;
   status.title = result.online
-    ? t("LM Studio 已連線；首次提問可能需要載入模型")
-    : t("請啟動 LM Studio Local Server");
+    ? t("首次提問需要載入模型")
+    : t("請先執行 setup.ps1");
   const catalog =
     result.catalog ||
     result.models.map((id) => ({
@@ -962,7 +962,7 @@ async function refreshModels() {
     ? t(
         `找到 ${answers.length} 個${catalog.some((m) => m.type !== "unknown") ? "回答" : "可用"}模型。清單包含未載入的模型；亦可自行輸入 identifier。`,
       )
-    : t("LM Studio 未連線；仍可手動輸入 model identifier 並儲存。");
+    : t("找不到 llama-server，請先執行 setup.ps1。");
   return result;
 }
 function syncModelPicker() {
@@ -1014,7 +1014,7 @@ $("#check-models").onclick = async () => {
     const result = await refreshModels();
     $("#settings-feedback").textContent = result.online
       ? t(`已連線，找到 ${result.models.length} 個模型。檢查使用已儲存的位址。`)
-      : t("連線失敗。請開啟 LM Studio Local Server，並先儲存正確位址。");
+      : t("找不到 llama-server，請先執行 setup.ps1。");
   } catch (error) {
     report(error);
   }

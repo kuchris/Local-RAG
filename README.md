@@ -2,7 +2,7 @@
 
 **A personal reading app for your PDFs and EPUBs.**
 
-Connect a folder, choose what to search, and ask questions with citations back to the original text. Local RAG runs as a Windows desktop app, with answers and embeddings handled by LM Studio on your computer.
+Connect a folder, choose what to search, and ask questions with citations back to the original text. Local RAG runs as a Windows desktop app, with answers and embeddings handled by llama.cpp on your computer.
 
 The interface supports **繁體中文 · English · 日本語**. The answer model is prompted to respond in the language of your question.
 
@@ -16,26 +16,31 @@ The interface supports **繁體中文 · English · 日本語**. The answer mode
 - **Focused questions:** search the whole library, a category, one document, or several selected documents.
 - **Answers with sources:** stream responses and open cited PDF pages or extracted EPUB chapters.
 - **Library organization:** create categories, move documents in bulk, and reopen conversations with their saved search scope.
-- **Local model choice:** choose a downloaded answer model or enter its LM Studio identifier manually.
+- **Local model choice:** choose any GGUF answer or embedding model from the `models/` folder.
 - **Embedding memory control:** release the embedding model after idle periods while keeping the saved index.
 
 ## Get started
 
-### 1. Prepare LM Studio
+### 1. Put models in `models/`
 
-Install LM Studio, download an answer model and an embedding model, then start its Local Server. The app defaults to `http://127.0.0.1:1234`.
+The app starts and stops [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` itself; there is no separate server to run. Place GGUF files in the repository's `models/` folder, one subfolder per model:
 
-| Purpose | Default configuration |
+```text
+models/
+  Qwen3.5-9B/            Qwen3.5-9B-Q4_K_M.gguf, mmproj-F32.gguf
+  Qwen3-Embedding-0.6B/  Qwen3-Embedding-0.6B-Q8_0.gguf
+```
+
+| Purpose | Default model ID (file name without `.gguf`) |
 | --- | --- |
-| Answers | Qwen3.5-9B, Q4_K_M quantization |
-| Answer identifier | `qwen3.5-9b` |
-| Embeddings | Qwen3-Embedding-0.6B, Q8_0 quantization |
-| Embedding identifier | `text-embedding-qwen3-embedding-0.6b` |
-| Answer model context | At least 8,192 tokens |
+| Answers | `Qwen3.5-9B-Q4_K_M` |
+| Embeddings | `Qwen3-Embedding-0.6B-Q8_0` |
 
-Check that the identifiers in the app's **Settings** match LM Studio. For scanned PDFs or pages requiring visual transcription, use an image-capable answer model. Qwen also needs its matching vision projection (`mmproj`).
+- A file whose name contains `embedding` is treated as an embedding model; anything else is an answer model.
+- An `mmproj*.gguf` in the same subfolder is the model's vision projector, used to transcribe scanned PDF pages.
+- File names must be unique across subfolders. Choose models in **Settings**.
 
-LM Studio runs separately; the app does not install models or start the server. Once dependencies and models are downloaded, document processing and inference can run locally without a cloud API key.
+Answers use an 8,192-token context with all layers on the GPU. Once dependencies and models are downloaded, everything runs locally without a cloud API key.
 
 ### 2. Launch the app
 
@@ -46,9 +51,9 @@ LM Studio runs separately; the app does not install models or start the server. 
 npm start
 ```
 
-Setup creates a Python 3.11 environment and installs the desktop dependencies. Afterwards, you can also launch with `Start Local RAG.cmd`.
+Setup creates a Python 3.11 environment, installs the desktop dependencies and downloads a pinned llama.cpp CUDA build (SHA256-verified) into `bin/llama/`. Afterwards, you can also launch with `Start Local RAG.cmd`.
 
-**From a portable build:** open `dist/Local-RAG-win32-x64/Local-RAG.exe`. Keep the entire build folder together. Python and the backend are included; LM Studio and model weights are separate. Build output is generated locally and is not included in the repository.
+**From a portable build:** open `dist/Local-RAG-win32-x64/Local-RAG.exe`. Keep the entire build folder together. Python, the backend and llama.cpp are included; put model weights in a `models/` folder next to `Local-RAG.exe`. Build output is generated locally and is not included in the repository.
 
 ### 3. Import and ask
 
@@ -93,11 +98,11 @@ This still uses retrieved excerpts. Whole-book summaries, chronology and connect
 
 ## Models and memory
 
-**Settings → Answer model** lists downloaded models and their loaded state. The identifier field also accepts custom names. Changing the answer model keeps existing indexes. Changing the embedding model requires an empty library and reimporting documents, because saved vectors depend on that model.
+**Settings → Answer model** lists the models in `models/` and their loaded state. Changing the answer model keeps existing indexes. Changing the embedding model requires an empty library and reimporting documents, because saved vectors depend on that model.
 
 By default, the embedding model stays loaded during imports and is released after 30 seconds idle. The next import or search loads it again. Choose **Keep loaded** to avoid repeated loading delays. Saved vectors remain on disk; this feature leaves the answer model loaded.
 
-Automatic loading and release depend on LM Studio's model-management endpoints. Unsupported servers or closing during an active import can leave the model loaded. Other applications sharing the same embedding instance may need to reload it after release.
+Each model runs in its own `llama-server` process on a random loopback port with a per-launch API key. Releasing the embedding model stops its process; all model processes are stopped when the app closes, and Windows ends them automatically if the backend crashes. Server logs are written to `llama-chat.log` and `llama-embedding.log` in the library folder.
 
 ## Data and privacy
 
@@ -109,7 +114,7 @@ The default library location is:
 
 It contains the SQLite database, imported file copies and backend logs. **Settings** shows the exact path. Close the app before backing up the entire folder. Deleting a document removes its stored citations; existing answer text remains until its conversation is deleted.
 
-The backend uses a random loopback port with a per-launch session secret. The renderer is sandboxed, and model requests accept only local LM Studio addresses. The application implements no cloud inference or telemetry.
+The backend uses a random loopback port with a per-launch session secret. The renderer is sandboxed, and model servers listen only on the loopback interface. The application implements no cloud inference or telemetry.
 
 `.gitignore` excludes document files, local databases, indexes, logs, environment files, test artifacts and build output. Ignore rules do not remove files from older Git commits; review files before publishing.
 
@@ -127,7 +132,7 @@ The backend uses a random loopback port with a per-launch session secret. The re
 Electron renderer → authenticated local FastAPI backend
                          ├─ PDF / EPUB extraction and folder monitoring
                          ├─ SQLite: documents, vectors and conversations
-                         └─ LM Studio: embeddings, answers and PDF vision
+                         └─ llama-server ×2: answers + PDF vision, embeddings
 ```
 
 The desktop implementation lives in `desktop/` and `backend/`. Imports run through one background worker; one answer is generated at a time.
@@ -144,7 +149,7 @@ npm test
 
 Python tests cover persistence, imports, category scope, folder updates, embedding lifecycle and prompt limits. `npm test` checks JavaScript syntax.
 
-For integration tests, start LM Studio with the configured models. The category test also needs Playwright's Chromium browser:
+For integration tests, put the configured models in `models/`. The category test also needs Playwright's Chromium browser:
 
 ```powershell
 npx playwright install chromium
@@ -162,7 +167,7 @@ Tests generate fictional PDF/EPUB fixtures and use isolated libraries under `art
 npm run pack
 ```
 
-Output: `dist/Local-RAG-win32-x64/`. Packaging replaces the previous output, so close that executable first. `LOCAL_RAG_PYTHON` overrides the runtime; `LOCAL_RAG_DATA_DIR` overrides the library location.
+Output: `dist/Local-RAG-win32-x64/`. Packaging replaces the previous output, so close that executable first. `LOCAL_RAG_PYTHON` overrides the runtime, `LOCAL_RAG_DATA_DIR` the library location, `LOCAL_RAG_MODELS_DIR` the models folder and `LOCAL_RAG_LLAMA_SERVER` the `llama-server.exe` path.
 
 ### Legacy CLI
 

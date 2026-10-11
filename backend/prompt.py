@@ -1,7 +1,9 @@
-"""Conservative UTF-8 byte budget for the default 8K context.
+"""Conservative UTF-8 byte budget for the llama-server context.
 
 Only evidence actually sent to the model is returned as a citation.
 """
+
+from backend.llama import CONTEXT
 
 SYSTEM = (
     "你是個人文件閱讀助手。使用與問題相同的語言回答，中文使用繁體中文。"
@@ -17,7 +19,7 @@ def clip_bytes(text, budget):
 
 
 def prepare_messages(question, sources, history, max_tokens, reading_mode='standard'):
-    prompt_budget = 8192 - max_tokens - 400
+    prompt_budget = CONTEXT - max_tokens - 400
     system = SYSTEM
     if reading_mode == 'fiction':
         system += '閱讀小說時，區分敘事事實、人物說法與你的推論；注意說話者、代詞、章節及事件先後。不可把局部檢索片段當作全書，也不可混合不同作品的角色或設定。缺少關鍵場景時明確指出，不推測結局。'

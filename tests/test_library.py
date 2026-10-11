@@ -15,6 +15,9 @@ class DeterministicEmbeddings:
     def embed(self, texts, settings, query=False):
         return np.array([[1, 0, 0] if 'orchid' in t.lower() else [0, 1, 0] for t in texts], dtype=np.float32)
 
+    def chat_endpoint(self, settings):
+        return 'http://chat.invalid', {}
+
 
 def pdf_bytes(text='Orchid project launches on 12 October 2026.', second_page=None):
     output = io.BytesIO()
@@ -120,7 +123,7 @@ def test_api_access_upload_history_and_empty_query(tmp_path):
         assert client.post('/api/documents', files={'file': ('bad.pdf', b'not pdf')}).status_code == 400
         assert client.post('/api/chat', json={'question': ' '}).status_code == 422
         assert client.get('/api/health', headers={'origin': 'https://evil.example'}).status_code == 403
-        assert client.put('/api/settings', json={'host': 'https://remote.example'}).status_code == 422
+        assert client.put('/api/settings', json={'top_k': 99}).status_code == 422
         response = client.post('/api/chat', json={'question': 'Question without documents'})
         assert '"type": "done"' in response.text
         conversations = client.get('/api/conversations').json()

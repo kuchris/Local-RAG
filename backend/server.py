@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import secrets
 import time
-from urllib.parse import urlparse
 from typing import Literal
 
 import httpx
@@ -19,27 +18,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from backend.core import Library
+from backend.core import Library, ModelClient
+from backend.llama import LlamaRuntime, default_paths
 from backend.prompt import prepare_messages
 from backend.folders import FolderSync
 
 
 class Settings(BaseModel):
-    host: str = "http://127.0.0.1:1234"
-    model: str = Field(default="qwen3.5-9b", min_length=1, max_length=200)
-    embedding_model: str = Field(default="text-embedding-qwen3-embedding-0.6b", min_length=1, max_length=200)
+    model: str = Field(default="Qwen3.5-9B-Q4_K_M", min_length=1, max_length=200)
+    embedding_model: str = Field(default="Qwen3-Embedding-0.6B-Q8_0", min_length=1, max_length=200)
     top_k: int = Field(default=5, ge=1, le=6)
     max_tokens: int = Field(default=1200, ge=100, le=2000)
     temperature: float = Field(default=0.2, ge=0, le=1)
     embedding_idle_unload: bool = True
-
-    @field_validator("host")
-    @classmethod
-    def local_host(cls, value):
-        parsed = urlparse(value)
-        if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1") or parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
-            raise ValueError("請使用本機 LM Studio 位址，例如 http://127.0.0.1:1234")
-        return value.rstrip("/")
 
 
 class Scope(BaseModel):
@@ -81,7 +72,10 @@ class FolderRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
-def create_app(data_dir: Path, token: str, client=None):
+def create_app(data_dir: Path, token: str, client=None, models_dir: Path | None = None, llama_server: Path | None = None):
+    if client is None:
+        default_models, default_server = default_paths()
+        client = ModelClient(LlamaRuntime(models_dir or default_models, llama_server or default_server, log_dir=data_dir))
     library = Library(data_dir, client)
     folders = FolderSync(library)
     generation_lock = asyncio.Lock()
@@ -125,6 +119,12 @@ def create_app(data_dir: Path, token: str, client=None):
     def health():
         return {"ok": True, "data_dir": str(library.root)}
 
+    @app.post('/api/shutdown')
+    async def shutdown():
+        if isinstance(library.client, ModelClient):
+            await run_in_threadpool(library.client.runtime.close)
+        return {"ok": True}
+
     @app.post('/api/release-embedding')
     def release_embedding():
         memory = getattr(library.client, 'memory', None)
@@ -143,24 +143,20 @@ def create_app(data_dir: Path, token: str, client=None):
 
     @app.get("/api/models")
     async def models():
-        try:
-            settings = library.settings()
-            async with httpx.AsyncClient(timeout=4, trust_env=False) as http:
-                native = await http.get(settings['host'] + '/api/v1/models')
-                if native.status_code == 200 and isinstance(native.json().get('models'), list):
-                    entries = native.json()['models']
-                    catalog = [{'id': m['key'], 'name': m.get('display_name', m['key']),
-                                'type': m['type'], 'loaded': bool(m.get('loaded_instances'))} for m in entries]
-                    ids = list(dict.fromkeys([m['key'] for m in entries] +
-                               [i['id'] for m in entries for i in m.get('loaded_instances', [])]))
-                else:
-                    response = await http.get(settings["host"] + "/v1/models")
-                    response.raise_for_status()
-                    ids = [r['id'] for r in response.json()['data']]
-                    catalog = [{'id': identifier, 'name': identifier, 'type': 'unknown', 'loaded': None} for identifier in ids]
-            return {"online": True, "models": ids, 'catalog': catalog, "configured_available": settings["model"] in ids}
-        except Exception:
+        settings = library.settings()
+        runtime = getattr(library.client, 'runtime', None)
+        if runtime is None:
             return {"online": False, "models": [], 'catalog': [], "configured_available": False}
+        try:
+            entries = await run_in_threadpool(runtime.catalog)
+            error = None
+        except ValueError as problem:
+            entries, error = {}, str(problem)
+        loaded = {runtime.loaded('chat'), runtime.loaded('embedding')}
+        catalog = [{'id': m.id, 'name': m.id, 'type': m.type, 'loaded': m.id in loaded,
+                    'vision': bool(m.mmproj), 'size': m.size} for m in entries.values()]
+        return {"online": runtime.available(), "models": list(entries), 'catalog': catalog, 'error': error,
+                "configured_available": settings["model"] in entries and settings['embedding_model'] in entries}
 
     @app.get("/api/documents")
     def documents():
@@ -304,17 +300,20 @@ def create_app(data_dir: Path, token: str, client=None):
                     answer = {'zh-Hant': '目前範圍沒有可查詢的文件。請選擇已完成處理的文件。', 'en': 'No searchable documents in this scope. Select documents that have finished processing.', 'ja': 'この範囲には検索できる文書がありません。処理済みの文書を選択してください。'}[query.language]
                     yield event("delta", text=answer)
                 else:
+                    runtime = getattr(library.client, 'runtime', None)
+                    if runtime and runtime.loaded('chat') != settings['model']:
+                        yield event("status", message="正在載入回答模型…")
+                    url, headers = await run_in_threadpool(library.client.chat_endpoint, settings)
                     yield event("status", message="正在閱讀原文並撰寫答案…")
                     async with httpx.AsyncClient(timeout=httpx.Timeout(180, connect=5), trust_env=False) as http:
-                        async with http.stream("POST", settings["host"] + "/v1/chat/completions", json={
+                        async with http.stream("POST", url + "/v1/chat/completions", headers=headers, json={
                             "model": settings["model"], "messages": messages, "stream": True,
                             "max_tokens": settings["max_tokens"], "temperature": settings["temperature"],
                             "chat_template_kwargs": {"enable_thinking": False},
-                            "reasoning_effort": "none",
                         }) as response:
                             if response.status_code != 200:
                                 await response.aread()
-                                raise ValueError(f"LM Studio 回應 {response.status_code}。請確認已下載並載入模型 {settings['model']}。")
+                                raise ValueError(f"llama-server 回應 {response.status_code}（模型 {settings['model']}）。請查看 llama-chat.log。")
                             completed = False
                             truncated = False
                             async for line in response.aiter_lines():
@@ -350,7 +349,7 @@ def create_app(data_dir: Path, token: str, client=None):
             except Exception as error:
                 message = str(error)
                 if isinstance(error, (httpx.ConnectError, httpx.TimeoutException)):
-                    message = "LM Studio 無法連線或回應逾時。請確認 server 和模型已啟動，再重試。"
+                    message = "llama-server 無法連線或回應逾時，請重試。"
                 yield event("error", message=message[:500])
             finally:
                 generation_lock.release()
@@ -367,11 +366,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--models-dir", type=Path)
+    parser.add_argument("--llama-server", type=Path)
     args = parser.parse_args()
     token = os.environ.get("LOCAL_RAG_TOKEN")
     if not token:
         raise SystemExit("LOCAL_RAG_TOKEN must be set")
-    app = create_app(args.data_dir, token)
+    app = create_app(args.data_dir, token, models_dir=args.models_dir, llama_server=args.llama_server)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", args.port))
     print(json.dumps({"port": sock.getsockname()[1]}), flush=True)
