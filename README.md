@@ -28,13 +28,13 @@ The app starts and stops [llama.cpp](https://github.com/ggml-org/llama.cpp) `lla
 ```text
 models/
   Qwen3.5-9B/            Qwen3.5-9B-Q4_K_M.gguf, mmproj-F32.gguf
-  Qwen3-Embedding-0.6B/  Qwen3-Embedding-0.6B-Q8_0.gguf
+  EmbeddingGemma-2/     embeddinggemma-2-Q8_0.gguf
 ```
 
 | Purpose | Default model ID (file name without `.gguf`) |
 | --- | --- |
 | Answers | `Qwen3.5-9B-Q4_K_M` |
-| Embeddings | `Qwen3-Embedding-0.6B-Q8_0` |
+| Embeddings | `embeddinggemma-2-Q8_0` ([ggml-org/embeddinggemma-2-GGUF](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF)) |
 
 - A file whose name contains `embedding` is treated as an embedding model; anything else is an answer model.
 - An `mmproj*.gguf` in the same subfolder is the model's vision projector, used to transcribe scanned PDF pages.
@@ -98,7 +98,7 @@ This still uses retrieved excerpts. Whole-book summaries, chronology and connect
 
 ## Models and memory
 
-**Settings → Answer model** lists the models in `models/` and their loaded state. Changing the answer model keeps existing indexes. Changing the embedding model requires an empty library and reimporting documents, because saved vectors depend on that model.
+**Settings → Answer model** lists the models in `models/` and their loaded state. Changing the answer model keeps existing indexes. Choosing another embedding model rebuilds the index: every stored passage is embedded again with the new model, without re-reading PDFs or repeating scanned-page transcription. The old index stays in use until the rebuild succeeds; questions wait until it finishes.
 
 By default, the embedding model stays loaded during imports and is released after 30 seconds idle. The next import or search loads it again. Choose **Keep loaded** to avoid repeated loading delays. Saved vectors remain on disk; this feature leaves the answer model loaded.
 

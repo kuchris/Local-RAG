@@ -1,10 +1,12 @@
 import { FileUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SourcesPanel, SourceViewer } from "@/components/SourcesPanel";
 import { useT } from "@/i18n";
 import { useImports } from "@/lib/imports";
+import { useReindex } from "@/lib/queries";
 import { useApp } from "@/lib/store";
 import { ChatView } from "@/views/ChatView";
 import { LibraryView } from "@/views/LibraryView";
@@ -13,6 +15,7 @@ export function App() {
   const app = useApp();
   const [collapsed, setCollapsed] = useState(() => window.innerWidth < 1100);
   const [settings, setSettings] = useState(false);
+  useReindexNotice();
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -40,6 +43,26 @@ export function App() {
       <Toaster />
     </div>
   );
+}
+
+/** Announces when an index rebuild finishes, wherever the user is. */
+function useReindexNotice() {
+  const t = useT();
+  const app = useApp();
+  const state = useReindex().data;
+  // Runs that had already finished when the window opened are not announced.
+  const announced = useRef<number | null>(null);
+  useEffect(() => {
+    if (!state) return;
+    if (announced.current === null) announced.current = state.status === "running" ? state.run - 1 : state.run;
+    if (state.status === "running" || state.run <= announced.current) return;
+    announced.current = state.run;
+    app.notify(
+      state.status === "done"
+        ? t("settings.reindexDone", { model: state.model ?? "" })
+        : t("settings.reindexFailed", { error: t.server(state.error ?? "") }),
+    );
+  }, [state, app, t]);
 }
 
 function DropOverlay() {
@@ -113,13 +136,19 @@ function FileInput() {
 
 function Toaster() {
   const { toasts } = useApp();
-  return (
-    <div className="pointer-events-none fixed bottom-24 left-1/2 z-50 flex -translate-x-1/2 flex-col items-center gap-2" role="status">
+  // Portaled live region, so modal dialogs (which aria-hide the app) don't silence notifications.
+  return createPortal(
+    <div
+      className="pointer-events-none fixed bottom-24 left-1/2 z-[60] flex -translate-x-1/2 flex-col items-center gap-2"
+      role="status"
+      aria-live="polite"
+    >
       {toasts.map((toast) => (
         <div key={toast.id} className="bg-primary text-primary-foreground max-w-md rounded-lg px-4 py-2.5 text-sm shadow-lg">
           {toast.text}
         </div>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }

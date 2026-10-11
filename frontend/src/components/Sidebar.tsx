@@ -3,7 +3,7 @@ import { Library, PanelLeftClose, PanelLeftOpen, Search, Settings, SquarePen, Tr
 import { useMemo, useState } from "react";
 import { useT } from "@/i18n";
 import { api } from "@/lib/api";
-import { keys, useConversations, useDocuments, useModels, useSettings } from "@/lib/queries";
+import { keys, useConversations, useDocuments, useModels, useReindex, useSettings } from "@/lib/queries";
 import { useApp } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -169,6 +169,11 @@ function useModelState() {
   const t = useT();
   const models = useModels().data;
   const settings = useSettings().data;
+  const reindex = useReindex().data;
+  if (reindex?.status === "running") {
+    const percent = Math.round((100 * reindex.done) / Math.max(1, reindex.total));
+    return { tone: "busy" as const, label: t("status.reindexing", { percent }), title: reindex.model ?? "" };
+  }
   if (!models || !settings) return { tone: "idle" as const, label: "…", title: "" };
   if (!models.online) return { tone: "error" as const, label: t("status.noServer"), title: t.server(models.error ?? "") };
   if (!models.configured_available || models.error)
@@ -181,7 +186,7 @@ function useModelState() {
   };
 }
 
-const tones = { ok: "bg-emerald-500", idle: "bg-zinc-400", error: "bg-danger" };
+const tones = { ok: "bg-emerald-500", idle: "bg-zinc-400", busy: "bg-amber-500", error: "bg-danger" };
 
 function ModelStatus() {
   const state = useModelState();

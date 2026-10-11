@@ -2,15 +2,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { languages, useT } from "@/i18n";
 import { api } from "@/lib/api";
-import { keys, useDocuments, useHealth, useModels, useSettings } from "@/lib/queries";
+import { keys, useDocuments, useHealth, useModels, useReindex, useSettings } from "@/lib/queries";
 import { useApp } from "@/lib/store";
 import { useTheme, type Theme } from "@/lib/theme";
-import type { Language, ModelEntry, Settings } from "@/lib/types";
+import type { Language, ModelEntry, ReindexState, Settings } from "@/lib/types";
 import { formatSize } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Dialog } from "./ui/dialog";
 import { Input, Label, NativeSelect } from "./ui/input";
-import { Tabs } from "./ui/misc";
+import { Progress, Tabs } from "./ui/misc";
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
   const t = useT();
@@ -20,6 +20,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const models = useModels().data;
   const documents = useDocuments().data ?? [];
   const dataDir = useHealth().data?.data_dir;
+  const reindex = useReindex();
+  const rebuilding = reindex.data?.status === "running";
   const [theme, setTheme] = useTheme();
   const [form, setForm] = useState<Settings | null>(null);
   const [tab, setTab] = useState("models");
@@ -40,17 +42,28 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const catalog = models?.catalog ?? [];
   const answers = catalog.filter((m) => m.type === "llm");
   const embeddings = catalog.filter((m) => m.type === "embedding");
-  const embeddingLocked = documents.length > 0;
+  // With documents, a different embedding model is applied by rebuilding the index, not by saving.
+  const needsReindex = documents.length > 0 && !!saved && form.embedding_model !== saved.embedding_model;
 
   async function save() {
     try {
-      await api("/settings", { method: "PUT", body: form });
+      await api("/settings", { method: "PUT", body: needsReindex ? { ...form, embedding_model: saved!.embedding_model } : form });
       await Promise.all([
         client.invalidateQueries({ queryKey: keys.settings }),
         client.invalidateQueries({ queryKey: keys.models }),
       ]);
       onOpenChange(false);
       app.notify(t("settings.saved"));
+    } catch (problem) {
+      setError(t.server((problem as Error).message));
+    }
+  }
+
+  async function rebuild() {
+    try {
+      // Seed the "running" state so polling sees the transition even if the rebuild finishes at once.
+      client.setQueryData(keys.reindex, await api<ReindexState>("/reindex", { method: "POST", body: { embedding_model: form!.embedding_model } }));
+      await client.invalidateQueries({ queryKey: keys.reindex });
     } catch (problem) {
       setError(t.server((problem as Error).message));
     }
@@ -100,12 +113,13 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     </option>
                   ))}
                 </NativeSelect>
-                <Label hint={embeddingLocked ? t("settings.embeddingLocked") : undefined}>{t("settings.embeddingModel")}</Label>
+                <Label>{t("settings.embeddingModel")}</Label>
                 <NativeSelect
                   value={form.embedding_model}
                   onChange={(e) => set("embedding_model", e.target.value)}
-                  disabled={embeddingLocked}
+                  disabled={rebuilding}
                   className="-mt-3"
+                  data-testid="embedding-model"
                 >
                   {ensure(embeddings, form.embedding_model)}
                   {embeddings.map((m) => (
@@ -114,6 +128,23 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     </option>
                   ))}
                 </NativeSelect>
+                {rebuilding && reindex.data && (
+                  <div className="bg-muted -mt-2 space-y-2 rounded-lg p-3 text-sm" data-testid="reindex-progress">
+                    <div>{t("settings.reindexing", { done: reindex.data.done, total: reindex.data.total })}</div>
+                    <Progress value={(100 * reindex.data.done) / Math.max(1, reindex.data.total)} />
+                  </div>
+                )}
+                {!rebuilding && reindex.data?.status === "error" && (
+                  <p className="text-danger -mt-2 text-xs">{t("settings.reindexFailed", { error: t.server(reindex.data.error ?? "") })}</p>
+                )}
+                {!rebuilding && needsReindex && (
+                  <div className="bg-muted -mt-2 space-y-3 rounded-lg p-3">
+                    <p className="text-muted-foreground text-xs leading-relaxed">{t("settings.reindexNote", { count: documents.length })}</p>
+                    <Button size="sm" variant="primary" onClick={rebuild} data-testid="reindex">
+                      {t("settings.reindex")}
+                    </Button>
+                  </div>
+                )}
                 <Label>{t("settings.idle")}</Label>
                 <NativeSelect
                   value={String(form.embedding_idle_unload)}

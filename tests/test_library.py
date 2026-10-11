@@ -165,3 +165,53 @@ def test_generation_error_releases_lock_and_does_not_save_a_false_answer(tmp_pat
             assert '"type": "done"' not in response.text
         with app.state.library.connect() as db:
             assert db.execute("SELECT count(*) FROM messages WHERE role='assistant'").fetchone()[0] == 0
+
+
+def test_reindex_swaps_vectors_and_model_atomically(tmp_path):
+    class TwoModels(DeterministicEmbeddings):
+        fail = False
+
+        def embed(self, texts, settings, query=False):
+            if settings['embedding_model'] == 'new-model':
+                if self.fail:
+                    raise ValueError('boom')
+                return np.array([[0, 0, 1, 0] if 'orchid' in t.lower() else [0, 0, 0, 1] for t in texts], dtype=np.float32)
+            return super().embed(texts, settings, query)
+
+    client = TwoModels()
+    library = Library(tmp_path, client)
+    doc = wait_ready(library, library.enqueue('notes.pdf', pdf_bytes())['id'])
+    old = library.settings()['embedding_model']
+
+    client.fail = True
+    library.start_reindex('new-model')
+    library.executor.submit(lambda: None).result()
+    assert library.reindexing['status'] == 'error' and library.reindexing['error'] == 'boom'
+    assert library.settings()['embedding_model'] == old
+    assert library.document(doc['id'])['embedding_model'] == old
+    assert len(library.retrieve('orchid', None, library.settings())) == 1
+
+    client.fail = False
+    library.start_reindex('new-model')
+    library.executor.submit(lambda: None).result()
+    assert library.reindexing['status'] == 'done'
+    assert library.settings()['embedding_model'] == 'new-model'
+    assert library.document(doc['id'])['embedding_model'] == 'new-model'
+    with library.connect() as db:
+        assert {len(r['vector']) for r in db.execute('SELECT vector FROM chunks')} == {16}
+    assert library.retrieve('orchid', None, library.settings())[0]['text'].startswith('Orchid')
+    with pytest.raises(ValueError):
+        library.start_reindex('new-model')
+
+    # A document queued after the switch is embedded with the new model.
+    second = wait_ready(library, library.enqueue('more.pdf', pdf_bytes('Another Orchid note.'))['id'])
+    assert second['embedding_model'] == 'new-model'
+    library.close()
+
+
+def test_questions_wait_for_reindex(tmp_path):
+    library = Library(tmp_path, DeterministicEmbeddings())
+    library.reindexing = library.reindexing | {'status': 'running'}
+    with pytest.raises(ValueError, match='重建'):
+        library.retrieve('anything', None, library.settings())
+    library.close()

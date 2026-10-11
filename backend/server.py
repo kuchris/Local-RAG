@@ -26,7 +26,7 @@ from backend.folders import FolderSync
 
 class Settings(BaseModel):
     model: str = Field(default="Qwen3.5-9B-Q4_K_M", min_length=1, max_length=200)
-    embedding_model: str = Field(default="Qwen3-Embedding-0.6B-Q8_0", min_length=1, max_length=200)
+    embedding_model: str = Field(default="embeddinggemma-2-Q8_0", min_length=1, max_length=200)
     top_k: int = Field(default=5, ge=1, le=6)
     max_tokens: int = Field(default=1200, ge=100, le=2000)
     temperature: float = Field(default=0.2, ge=0, le=1)
@@ -66,6 +66,10 @@ class Query(Scope):
         if len(value.encode('utf-8')) > 4000:
             raise ValueError("問題過長，請縮短後重試。")
         return value.strip()
+
+
+class ReindexRequest(BaseModel):
+    embedding_model: str = Field(min_length=1, max_length=200)
 
 
 class FolderRequest(BaseModel):
@@ -140,6 +144,19 @@ def create_app(data_dir: Path, token: str, client=None, models_dir: Path | None 
     def save_settings(settings: Settings):
         library.save_settings(settings.model_dump())
         return library.settings()
+
+    @app.get('/api/reindex')
+    def reindex_status():
+        return library.reindexing
+
+    @app.post('/api/reindex', status_code=202)
+    def reindex(value: ReindexRequest):
+        runtime = getattr(library.client, 'runtime', None)
+        if runtime:
+            model = runtime.model(value.embedding_model)
+            if model.type != 'embedding':
+                raise ValueError('設定的 embedding 模型不是 embedding 模型。')
+        return library.start_reindex(value.embedding_model)
 
     @app.get("/api/models")
     async def models():

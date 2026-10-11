@@ -30,7 +30,7 @@ LEGACY_MODELS = {
 
 DEFAULTS = {
     "model": "Qwen3.5-9B-Q4_K_M",
-    "embedding_model": "Qwen3-Embedding-0.6B-Q8_0",
+    "embedding_model": "embeddinggemma-2-Q8_0",
     "top_k": 5,
     "max_tokens": 1200,
     "temperature": 0.2,
@@ -145,6 +145,7 @@ class Library:
         self.client = client or ModelClient(LlamaRuntime(*default_paths(), log_dir=self.root))
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="import")
         self.write_lock = threading.RLock()
+        self.reindexing = {'status': 'idle', 'model': None, 'done': 0, 'total': 0, 'error': None, 'run': 0}
         with self.connect() as db:
             db.executescript("""
             PRAGMA journal_mode=WAL;
@@ -335,6 +336,8 @@ class Library:
             db.execute("UPDATE documents SET " + ",".join(f"{k}=?" for k in values) + " WHERE id=?", (*values.values(), doc_id))
 
     def process(self, doc_id, settings):
+        # Read settings when the job runs (not when queued) so a reindex in between can't mix models.
+        settings = settings | {'embedding_model': self.settings()['embedding_model']}
         session = self.client.memory.session() if isinstance(self.client, ModelClient) else nullcontext()
         with session:
             self._process(doc_id, settings)
@@ -369,7 +372,8 @@ class Library:
                 db.execute('DELETE FROM sections WHERE document_id=?', (doc_id,))
                 db.executemany('INSERT INTO sections VALUES (?,?,?,?)', normalized)
                 db.executemany("INSERT INTO chunks(document_id,page,text,vector) VALUES (?,?,?,?)", embedded)
-                db.execute("UPDATE documents SET status='ready',progress=100,chunks=?,error=NULL WHERE id=?", (len(chunks), doc_id))
+                db.execute("UPDATE documents SET status='ready',progress=100,chunks=?,error=NULL,embedding_model=? WHERE id=?",
+                           (len(chunks), settings['embedding_model'], doc_id))
         except Exception as error:
             message = str(error)
             if isinstance(error, (httpx.ConnectError, httpx.TimeoutException)):
@@ -391,6 +395,48 @@ class Library:
             sections.append((number, f'第 {number} 頁', text))
             self.update(doc_id, progress=5 + int(15 * number / len(reader.pages)))
         return sections, 'pypdf+qwen-vision' if used_vision else 'pypdf'
+
+    def start_reindex(self, embedding_model):
+        """Queue a rebuild of every stored chunk's vector with another embedding model."""
+        with self.write_lock:
+            if self.reindexing['status'] == 'running':
+                raise ValueError('索引正在重建中，請稍候。')
+            if embedding_model == self.settings()['embedding_model']:
+                raise ValueError('已經在使用這個 embedding 模型。')
+            with self.connect() as db:
+                total = db.execute('SELECT count(*) FROM chunks').fetchone()[0]
+            self.reindexing = {'status': 'running', 'model': embedding_model, 'done': 0, 'total': total, 'error': None,
+                               'run': self.reindexing['run'] + 1}
+        # The single import worker runs this exclusively, so no import can embed with a mixed model.
+        self.executor.submit(self._reindex, embedding_model)
+        return self.reindexing
+
+    def _reindex(self, embedding_model):
+        settings = self.settings() | {'embedding_model': embedding_model}
+        session = self.client.memory.session() if isinstance(self.client, ModelClient) else nullcontext()
+        try:
+            with session:
+                with self.connect() as db:
+                    rows = db.execute('SELECT id,text FROM chunks ORDER BY id').fetchall()
+                vectors = []
+                for offset in range(0, len(rows), 32):
+                    batch = rows[offset:offset + 32]
+                    embedded = self.client.embed([r['text'] for r in batch], settings)
+                    vectors.extend((v.astype(np.float32).tobytes(), r['id']) for r, v in zip(batch, embedded))
+                    self.reindexing['done'] = len(vectors)
+            # Swap everything in one transaction; a failure above leaves the old index untouched.
+            # Imports share this worker, so no chunks appear meanwhile; deleted ones just match no row.
+            with self.write_lock, self.connect() as db:
+                db.executemany('UPDATE chunks SET vector=? WHERE id=?', vectors)
+                db.execute('UPDATE documents SET embedding_model=?', (embedding_model,))
+                saved = json.loads(db.execute('SELECT data FROM settings WHERE id=1').fetchone()[0])
+                db.execute('UPDATE settings SET data=? WHERE id=1', (json.dumps(saved | {'embedding_model': embedding_model}),))
+            self.reindexing = self.reindexing | {'status': 'done'}
+        except Exception as error:
+            message = str(error)
+            if isinstance(error, (httpx.ConnectError, httpx.TimeoutException)):
+                message = '無法取得 embedding。llama-server 無法連線或逾時，請查看 llama-embedding.log 後重試。'
+            self.reindexing = self.reindexing | {'status': 'error', 'error': message[:500]}
 
     def retry(self, doc_id):
         with self.write_lock:
@@ -418,6 +464,8 @@ class Library:
         path.unlink(missing_ok=True)
 
     def retrieve(self, question, document_ids, settings, reading_mode='standard'):
+        if self.reindexing['status'] == 'running':
+            raise ValueError('索引正在重建中，完成後才能提問。')
         if document_ids == []:
             return []
         with self.connect() as db:

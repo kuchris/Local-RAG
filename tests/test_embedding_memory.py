@@ -47,7 +47,7 @@ def client(monkeypatch):
     client = ModelClient(runtime)
     now = [0]
     client.memory.clock = lambda: now[0]
-    return client, runtime, now, DEFAULTS
+    return client, runtime, now, DEFAULTS | {'embedding_model': 'Qwen3-Embedding-0.6B-Q8_0'}
 
 
 def test_idle_stop_and_restart_on_next_embedding(client):

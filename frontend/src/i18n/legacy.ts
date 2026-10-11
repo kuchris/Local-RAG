@@ -962,5 +962,8 @@ export const legacyCopy: [string, string, string][] = [
   ["llama-server 回應 {status}（模型 {model}）。請查看 llama-chat.log。","llama-server returned {status} (model {model}). Check llama-chat.log.","llama-server の応答 {status}（モデル {model}）。llama-chat.log を確認してください。"],
   ["llama-server 無法連線或回應逾時，請重試。","llama-server was unreachable or timed out. Try again.","llama-server に接続できないかタイムアウトしました。再試行してください。"],
   ["正在載入回答模型…","Loading the answer model…","回答モデルを読み込み中…"],
-  ["Embedding 自動釋放失敗，稍後會重試。","Releasing the embedding model failed; it will retry shortly.","埋め込みモデルの解放に失敗しました。後で再試行します。"]
+  ["Embedding 自動釋放失敗，稍後會重試。","Releasing the embedding model failed; it will retry shortly.","埋め込みモデルの解放に失敗しました。後で再試行します。"],
+  ["索引正在重建中，請稍候。", "The index is being rebuilt. Please wait.", "索引を再構築中です。お待ちください。"],
+  ["已經在使用這個 embedding 模型。", "That embedding model is already in use.", "その埋め込みモデルはすでに使用中です。"],
+  ["索引正在重建中，完成後才能提問。", "The index is being rebuilt; you can ask once it finishes.", "索引を再構築中です。完了後に質問できます。"]
 ];

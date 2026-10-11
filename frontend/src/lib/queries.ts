@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { Category, Conversation, Document, Folder, ModelStatus, Settings } from "./types";
+import type { Category, Conversation, Document, Folder, ModelStatus, ReindexState, Settings } from "./types";
 
 export const keys = {
   documents: ["documents"],
@@ -10,6 +10,7 @@ export const keys = {
   models: ["models"],
   settings: ["settings"],
   health: ["health"],
+  reindex: ["reindex"],
 } as const;
 
 export const useDocuments = () =>
@@ -25,6 +26,22 @@ export const useModels = () =>
 export const useSettings = () => useQuery({ queryKey: keys.settings, queryFn: () => api<Settings>("/settings") });
 export const useHealth = () =>
   useQuery({ queryKey: keys.health, queryFn: () => api<{ data_dir: string }>("/health") });
+
+/** Polls while an index rebuild runs, then refreshes everything that depends on the embedding model. */
+export function useReindex() {
+  const client = useQueryClient();
+  return useQuery({
+    queryKey: keys.reindex,
+    queryFn: async () => {
+      const previous = client.getQueryData<ReindexState>(keys.reindex);
+      const state = await api<ReindexState>("/reindex");
+      if (previous && (previous.status === "running" || previous.run !== state.run) && state.status !== "running")
+        await Promise.all([keys.settings, keys.documents, keys.models].map((queryKey) => client.invalidateQueries({ queryKey })));
+      return state;
+    },
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 1000 : false),
+  });
+}
 
 /** Refetch the library after a mutation (documents and category counts move together). */
 export function useRefreshLibrary() {

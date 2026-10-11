@@ -98,6 +98,16 @@ export interface ModelStatus {
   configured_available: boolean;
 }
 
+export interface ReindexState {
+  status: "idle" | "running" | "done" | "error";
+  model: string | null;
+  done: number;
+  total: number;
+  error: string | null;
+  /** Increments with every rebuild started since the backend launched. */
+  run: number;
+}
+
 export interface Preferences {
   language: Language;
   scope: Scope;
