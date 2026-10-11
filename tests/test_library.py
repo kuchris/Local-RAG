@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
-from backend.core import Library, split_text, needs_vision
+from backend.core import Library, needs_vision, split_text
 from backend.server import create_app
 
 
@@ -14,6 +14,9 @@ class DeterministicEmbeddings:
     """For persistence and orchestration tests only; not a retrieval quality test."""
     def embed(self, texts, settings, query=False):
         return np.array([[1, 0, 0] if 'orchid' in t.lower() else [0, 1, 0] for t in texts], dtype=np.float32)
+
+    def chat_endpoint(self, settings):
+        return 'http://chat.invalid', {}
 
 
 def pdf_bytes(text='Orchid project launches on 12 October 2026.', second_page=None):
@@ -120,7 +123,7 @@ def test_api_access_upload_history_and_empty_query(tmp_path):
         assert client.post('/api/documents', files={'file': ('bad.pdf', b'not pdf')}).status_code == 400
         assert client.post('/api/chat', json={'question': ' '}).status_code == 422
         assert client.get('/api/health', headers={'origin': 'https://evil.example'}).status_code == 403
-        assert client.put('/api/settings', json={'host': 'https://remote.example'}).status_code == 422
+        assert client.put('/api/settings', json={'top_k': 99}).status_code == 422
         response = client.post('/api/chat', json={'question': 'Question without documents'})
         assert '"type": "done"' in response.text
         conversations = client.get('/api/conversations').json()
@@ -162,3 +165,102 @@ def test_generation_error_releases_lock_and_does_not_save_a_false_answer(tmp_pat
             assert '"type": "done"' not in response.text
         with app.state.library.connect() as db:
             assert db.execute("SELECT count(*) FROM messages WHERE role='assistant'").fetchone()[0] == 0
+
+
+def test_reindex_swaps_vectors_and_model_atomically(tmp_path):
+    class TwoModels(DeterministicEmbeddings):
+        fail = False
+
+        def embed(self, texts, settings, query=False):
+            if settings['embedding_model'] == 'new-model':
+                if self.fail:
+                    raise ValueError('boom')
+                return np.array([[0, 0, 1, 0] if 'orchid' in t.lower() else [0, 0, 0, 1] for t in texts], dtype=np.float32)
+            return super().embed(texts, settings, query)
+
+    client = TwoModels()
+    library = Library(tmp_path, client)
+    doc = wait_ready(library, library.enqueue('notes.pdf', pdf_bytes())['id'])
+    old = library.settings()['embedding_model']
+
+    client.fail = True
+    library.start_reindex('new-model')
+    library.executor.submit(lambda: None).result()
+    assert library.reindexing['status'] == 'error' and library.reindexing['error'] == 'boom'
+    assert library.settings()['embedding_model'] == old
+    assert library.document(doc['id'])['embedding_model'] == old
+    assert len(library.retrieve('orchid', None, library.settings())) == 1
+
+    client.fail = False
+    library.start_reindex('new-model')
+    library.executor.submit(lambda: None).result()
+    assert library.reindexing['status'] == 'done'
+    assert library.settings()['embedding_model'] == 'new-model'
+    assert library.document(doc['id'])['embedding_model'] == 'new-model'
+    with library.connect() as db:
+        assert {len(r['vector']) for r in db.execute('SELECT vector FROM chunks')} == {16}
+    assert library.retrieve('orchid', None, library.settings())[0]['text'].startswith('Orchid')
+    with pytest.raises(ValueError):
+        library.start_reindex('new-model')
+
+    # A document queued after the switch is embedded with the new model.
+    second = wait_ready(library, library.enqueue('more.pdf', pdf_bytes('Another Orchid note.'))['id'])
+    assert second['embedding_model'] == 'new-model'
+    library.close()
+
+
+def test_questions_wait_for_reindex(tmp_path):
+    library = Library(tmp_path, DeterministicEmbeddings())
+    library.reindexing = library.reindexing | {'status': 'running'}
+    with pytest.raises(ValueError, match='重建'):
+        library.retrieve('anything', None, library.settings())
+    library.close()
+
+
+def test_keyword_index_follows_chunks_and_matches_cjk(tmp_path):
+    from backend.core import search_terms
+    assert search_terms('綾小路と堀北, Orchid 2026!') == ['綾小', '小路', '路と', 'と堀', '堀北', 'orchid', '2026']
+    library = Library(tmp_path, DeterministicEmbeddings())
+    doc = wait_ready(library, library.enqueue('notes.pdf', pdf_bytes('Orchid budget 4200', second_page='Timer measured'))['id'])
+    with library.connect() as db:
+        assert db.execute('SELECT count(*) FROM chunk_terms').fetchone()[0] == doc['chunks']
+    scores, coverage = library.keyword_scores('orchid budget')
+    assert len(scores) == 1 and coverage == 1.0
+    assert library.keyword_scores('orchid zebra')[1] == 0.5
+    assert library.keyword_scores('???') == ({}, 0.0)
+    library.delete(doc['id'])
+    with library.connect() as db:
+        assert db.execute('SELECT count(*) FROM chunk_terms').fetchone()[0] == 0
+    library.close()
+
+
+def test_keyword_index_is_backfilled_for_existing_libraries(tmp_path):
+    library = Library(tmp_path, DeterministicEmbeddings())
+    wait_ready(library, library.enqueue('notes.pdf', pdf_bytes())['id'])
+    with library.connect() as db:
+        db.execute('DELETE FROM chunk_terms')
+    library.close()
+    library = Library(tmp_path, DeterministicEmbeddings())
+    assert library.keyword_scores('orchid')[0]
+    library.close()
+
+
+def test_reranker_reorders_hybrid_candidates(tmp_path):
+    class Reranking(DeterministicEmbeddings):
+        calls = []
+
+        def rerank(self, query, texts, settings):
+            self.calls.append(len(texts))
+            # Prefer the passage about timers even though vectors and keywords favour Orchid.
+            return np.array([1.0 if 'Timer' in t else 0.0 for t in texts])
+
+    client = Reranking()
+    library = Library(tmp_path, client)
+    wait_ready(library, library.enqueue('a.pdf', pdf_bytes('Orchid budget is 4200.'))['id'])
+    wait_ready(library, library.enqueue('b.pdf', pdf_bytes('Timer A measured 7.4 ms.'))['id'])
+    settings = library.settings()
+    assert library.retrieve('orchid', None, settings | {'reranker_model': ''})[0]['text'].startswith('Orchid')
+    assert not client.calls
+    assert library.retrieve('orchid', None, settings | {'reranker_model': 'bge'})[0]['text'].startswith('Timer')
+    assert client.calls == [2]
+    library.close()

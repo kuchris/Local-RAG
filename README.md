@@ -2,170 +2,221 @@
 
 **A personal reading app for your PDFs and EPUBs.**
 
-Connect a folder, choose what to search, and ask questions with citations back to the original text. Local RAG runs as a Windows desktop app, with answers and embeddings handled by LM Studio on your computer.
+Connect a folder, choose what to search, and ask questions with citations back to the original text. Local RAG is a Windows desktop app; answers, embeddings and reranking run on your own GPU through [llama.cpp](https://github.com/ggml-org/llama.cpp), with no cloud service.
 
-The interface supports **繁體中文 · English · 日本語**. The answer model is prompted to respond in the language of your question.
+The interface supports **繁體中文 · English · 日本語**, in light or dark mode. The answer model is prompted to respond in the language of your question.
 
-![Local RAG desktop app showing an English answer and its source excerpt](docs/images/local-rag-app.png)
+![Local RAG showing an English answer, its citation and the source passage](docs/images/local-rag-app.png)
 
-*Example screen with an English answer grounded in a fictional EPUB.*
+*Example screen with an answer grounded in a fictional EPUB.*
 
 ## Features
 
-- **Folder imports:** watch subfolders for new and changed PDFs and EPUBs, or add individual files with the picker and drag and drop.
-- **Focused questions:** search the whole library, a category, one document, or several selected documents.
-- **Answers with sources:** stream responses and open cited PDF pages or extracted EPUB chapters.
-- **Library organization:** create categories, move documents in bulk, and reopen conversations with their saved search scope.
-- **Local model choice:** choose a downloaded answer model or enter its LM Studio identifier manually.
-- **Embedding memory control:** release the embedding model after idle periods while keeping the saved index.
+- **Chat with your library:** streamed answers with inline citations; open the cited PDF page or EPUB chapter.
+- **Focused questions:** search everything, one category, or hand-picked documents from the scope menu in the question box.
+- **Fiction mode:** adds nearby chapter context and asks the model to separate narration, dialogue and inference.
+- **Folder sync:** connected folders (with subfolders) import new and changed PDFs and EPUBs automatically.
+- **Library management:** categories, bulk moves, retries and deletion on a dedicated Library page.
+- **Hybrid retrieval:** vector search and BM25 keyword search, reordered by a reranker.
+- **Model choice:** any GGUF answer, embedding or reranker model from the `models/` folder; switching the embedding model rebuilds the index in place.
 
 ## Get started
 
-### 1. Prepare LM Studio
+### 1. Requirements
 
-Install LM Studio, download an answer model and an embedding model, then start its Local Server. The app defaults to `http://127.0.0.1:1234`.
+- Windows 10/11 x64 with an NVIDIA GPU (the bundled llama.cpp build uses CUDA 13). The default models use about 9–10 GB of VRAM.
+- For running from source: Node.js **22.12 or newer** and [`uv`](https://docs.astral.sh/uv/).
 
-| Purpose | Default configuration |
-| --- | --- |
-| Answers | Qwen3.5-9B, Q4_K_M quantization |
-| Answer identifier | `qwen3.5-9b` |
-| Embeddings | Qwen3-Embedding-0.6B, Q8_0 quantization |
-| Embedding identifier | `text-embedding-qwen3-embedding-0.6b` |
-| Answer model context | At least 8,192 tokens |
+### 2. Install
 
-Check that the identifiers in the app's **Settings** match LM Studio. For scanned PDFs or pages requiring visual transcription, use an image-capable answer model. Qwen also needs its matching vision projection (`mmproj`).
-
-LM Studio runs separately; the app does not install models or start the server. Once dependencies and models are downloaded, document processing and inference can run locally without a cloud API key.
-
-### 2. Launch the app
-
-**From source:** clone or download this repository, install Node.js **22.12 or newer** and `uv`, then open PowerShell in the repository folder:
+Clone or download this repository, then in PowerShell in the repository folder:
 
 ```powershell
 .\setup.ps1
-npm start
 ```
 
-Setup creates a Python 3.11 environment and installs the desktop dependencies. Afterwards, you can also launch with `Start Local RAG.cmd`.
+Setup creates a Python 3.11 environment, installs the Node.js dependencies and downloads a pinned llama.cpp CUDA build (SHA256-verified) into `bin/llama/`.
 
-**From a portable build:** open `dist/Local-RAG-win32-x64/Local-RAG.exe`. Keep the entire build folder together. Python and the backend are included; LM Studio and model weights are separate. Build output is generated locally and is not included in the repository.
+### 3. Add models
 
-### 3. Import and ask
+Put GGUF files in `models/`, one subfolder per model:
 
-1. Click **Connect folder** or **Add individual files**. PDF and EPUB files can be up to 50 MB each.
-2. Wait for processing to finish. Exact duplicates are detected even when renamed.
-3. Choose a category, click a document, or tick several documents. Check the scope above the question box.
-4. Ask a question, then click a citation to inspect its source. **Stop** cancels generation; incomplete answers are not saved.
+```text
+models/
+  Qwen3.5-9B/            Qwen3.5-9B-Q4_K_M.gguf, mmproj-F32.gguf
+  EmbeddingGemma-2/      embeddinggemma-2-Q8_0.gguf
+  bge-reranker-v2-m3/    bge-reranker-v2-m3-Q8_0.gguf
+```
 
-Switch the interface language at the top of the window. Document text, custom names and saved answers keep their original language.
+| Purpose | Default model ID (file name without `.gguf`) | Source |
+| --- | --- | --- |
+| Answers (+ scanned-page reading) | `Qwen3.5-9B-Q4_K_M` with its `mmproj` | any Qwen3.5-9B GGUF with a vision projector |
+| Embeddings | `embeddinggemma-2-Q8_0` | [ggml-org/embeddinggemma-2-GGUF](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF) |
+| Reranking (optional) | `bge-reranker-v2-m3-Q8_0` | [gpustack/bge-reranker-v2-m3-GGUF](https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF) |
 
-## Organize your reading
+- A file name containing `rerank` marks a reranker and one containing `embedding` an embedding model; anything else is an answer model.
+- An `mmproj*.gguf` in the same subfolder is the vision projector used to transcribe scanned PDF pages.
+- File names must be unique across subfolders. Pick models under **Settings → Models**.
 
-### Categories and selections
+### 4. Launch
 
-Click **＋** beside the category picker to create or rename a category. Tick documents, choose a destination, and click **Move to category**. Each document belongs to one category. Removing a category returns its documents to **Uncategorized** without deleting them or rebuilding indexes.
+```powershell
+npm.cmd start
+```
 
-Category and document selections work together: only selected documents in that category are searched. **Select visible** selects the current list, **Clear selection** selects nothing, and **All documents** returns to the whole library. Empty or missing selections never silently expand to all documents.
+or double-click `Start Local RAG.cmd`. (`npm.cmd` works even when PowerShell's execution policy blocks `npm.ps1`.) The first question loads the answer model, which takes about ten seconds.
 
-Changing scope or reading mode starts a new conversation. Reopening a conversation restores its saved scope. Categories remain live groups whose membership can change as you organize or update files.
+## Using the app
 
-### Connected folders
+### Ask
 
-Folders are checked about every 10 seconds while the app is open. Files are imported after their size and modification time stabilize. Reopening the app checks for changes made while it was closed.
+Type a question and press Enter (Shift + Enter for a new line); **Stop** cancels generation, and incomplete answers are not saved. Click a citation number to open the **Sources** panel; from there, open the PDF page or EPUB chapter. Ctrl + N starts a new chat.
 
-| Action | Result |
-| --- | --- |
-| Add a PDF or EPUB | Queue it for import, including files in subfolders. |
-| Update a file | Index a replacement first; a failed update keeps the old searchable version. |
-| Move or delete the original | Keep the imported library copy. |
-| Disconnect a folder | Keep its imported documents. |
-| Delete a document in the app | Remove its copy and index; exclude that unchanged folder version until the source changes or you import it manually. |
-
-Successful replacements inherit the old category unless already classified. Older automatically imported versions are removed only when no other tracked file refers to them; independently imported copies are retained. Original files are never modified.
-
-Use **⋯ → Connected folders** to inspect errors or request a scan. Entire drives, overlapping folders, symlinks/junctions and the app's own data directory are excluded. Changes that preserve both file size and modification time are not detected automatically.
+The **scope** button at the bottom left of the question box chooses what to search: all documents, one category, or ticked documents within it. An empty selection never silently expands to everything. Changing scope or reading mode starts a new chat; reopening a chat restores its scope.
 
 ### Fiction mode
 
-Select a book or series, then choose **Fiction / narrative** in the question box. It adds nearby text from the same chapter or PDF page and asks the model to distinguish narration, character statements and inference. Existing indexes work without rebuilding.
+Switch the question box from **Standard** to **Fiction** when reading novels. Each retrieved passage is widened with nearby text from the same chapter, and the model is asked to distinguish narration, character statements and its own inference. It still answers from retrieved excerpts: whole-book summaries, chronology and links between distant chapters can miss important scenes.
 
-This still uses retrieved excerpts. Whole-book summaries, chronology and connections across distant chapters can miss important scenes. Fiction mode does not build chapter summaries or read the entire book for every question.
+### Library
 
-## Models and memory
+Open **Library** in the sidebar.
 
-**Settings → Answer model** lists downloaded models and their loaded state. The identifier field also accepts custom names. Changing the answer model keeps existing indexes. Changing the embedding model requires an empty library and reimporting documents, because saved vectors depend on that model.
+- **Documents:** search and filter by category, tick documents to move them to a category, ask about them, or delete them. Drag PDF or EPUB files anywhere onto the window to import them (up to 50 MB each); exact duplicates are detected even when renamed.
+- **Folders:** connect a folder to import its PDFs and EPUBs, including subfolders, and keep them in sync.
+- **Categories:** create, rename or remove categories. Removing one returns its documents to **Uncategorized**.
 
-By default, the embedding model stays loaded during imports and is released after 30 seconds idle. The next import or search loads it again. Choose **Keep loaded** to avoid repeated loading delays. Saved vectors remain on disk; this feature leaves the answer model loaded.
+Connected folders are checked about every 10 seconds while the app is open, and once at start-up for changes made while it was closed. Files are imported after their size and modification time stop changing.
 
-Automatic loading and release depend on LM Studio's model-management endpoints. Unsupported servers or closing during an active import can leave the model loaded. Other applications sharing the same embedding instance may need to reload it after release.
+| Folder change | Result |
+| --- | --- |
+| Add a PDF or EPUB | Imported, including files in subfolders. |
+| Update a file | The new version is indexed first; if that fails, the old one stays searchable. |
+| Move or delete the original | The library copy is kept. |
+| Disconnect the folder | Its imported documents are kept. |
+| Delete a document in the app | Its copy and index are removed; that unchanged file is not re-imported until it changes or you add it manually. |
+
+Updated documents keep their category. Original files are never modified. Entire drives, overlapping folders, symlinks/junctions and the app's own data folder cannot be connected.
+
+## Models and retrieval
+
+### How a question is answered
+
+1. **Hybrid search:** the question is embedded and compared with every passage, and also matched with SQLite FTS5 BM25 (words, and overlapping character pairs for Chinese and Japanese). The two rankings are merged with reciprocal rank fusion; keywords count only as far as the question's words occur in the library, so an English question about Chinese books relies on the vectors.
+2. **Reranking:** the reranker scores the best 30 passages against the question and reorders them.
+3. **Answering:** the top passages (5 by default) go to the answer model within an 8,192-token context, budgeted in estimated tokens so Chinese and Japanese passages are not cut short.
+
+### Measured on a real library
+
+`scripts/eval_retrieval.py` builds a fixed set of questions from your own documents (the answer model writes a paraphrased question per sampled passage and quotes the answer sentence) and reports how often the answer is retrieved. On a library of 32 Chinese novels (5,529 passages, 48 questions, a quarter of them in English):
+
+| Change | Answer ranked 1st | In top 5 | Reaches the prompt |
+| --- | --- | --- | --- |
+| Character-overlap keywords + vectors | 0.30 | 0.68 | — |
+| + BM25 keywords, coverage-weighted | 0.58 | 0.85 | — |
+| + bge-reranker-v2-m3 | 0.75 | 0.94 | 0.88 |
+| + token-based evidence budget (current) | 0.75 | 0.94 | 0.94 |
+
+The first two rows were measured with the benchmark's earlier version (60 questions, hit = the exact source passage); later rows count a hit when a passage contains the quoted answer sentence. Same-language questions now reach the prompt every time. Tried and not adopted: Qwen3-Reranker-0.6B (lower and slower), sentence-packed passages of 350 or 650 tokens, and book/chapter titles in the embedded text. The benchmark covers looking up specific passages; it does not measure whole-book questions.
+
+To run it, close the app and use:
+
+```powershell
+.venv\Scripts\python.exe scripts\eval_retrieval.py --note "what changed"
+```
+
+Questions and results are stored in the library folder under `eval/` (they quote your documents), and each run appends to `results.jsonl` for comparison.
+
+### Changing models
+
+Changing the answer model or reranker takes effect immediately. Choosing another embedding model offers **Rebuild index and switch**: the stored passage text is embedded again with the new model, without re-reading files or repeating scanned-page transcription. The old index stays in use until the rebuild succeeds, and questions wait until it finishes.
+
+### Memory
+
+The answer model stays loaded once used. The embedding model and reranker are released after 30 seconds idle (or kept loaded, under **Settings → Models**) and load again for the next import or search; saved vectors remain on disk.
+
+Each model runs in its own `llama-server` process on a random loopback port with a per-launch API key. All of them stop when the app closes, and Windows ends them if the backend crashes. Server logs are `llama-chat.log`, `llama-embedding.log` and `llama-rerank.log` in the library folder.
 
 ## Data and privacy
 
-The default library location is:
+The library lives in:
 
 ```text
-%APPDATA%/local-rag-desktop/library
+%APPDATA%\local-rag-desktop\library
 ```
 
-It contains the SQLite database, imported file copies and backend logs. **Settings** shows the exact path. Close the app before backing up the entire folder. Deleting a document removes its stored citations; existing answer text remains until its conversation is deleted.
+It holds the SQLite database (documents, passages, vectors, chats), copies of imported files and logs; **Settings → General** shows the path. Close the app before backing it up. Deleting a document removes its stored citations; answer text remains until its chat is deleted.
 
-The backend uses a random loopback port with a per-launch session secret. The renderer is sandboxed, and model requests accept only local LM Studio addresses. The application implements no cloud inference or telemetry.
-
-`.gitignore` excludes document files, local databases, indexes, logs, environment files, test artifacts and build output. Ignore rules do not remove files from older Git commits; review files before publishing.
+The backend listens on a random loopback port with a per-launch session secret, the renderer is sandboxed, and model servers listen only on loopback. The app has no cloud inference or telemetry. `.gitignore` excludes documents, databases, models, logs and build output; ignore rules do not remove files from earlier commits, so review before publishing.
 
 ## Current limits
 
-- **Platform:** the portable build targets Windows x64 and is unsigned. Other platforms have not been validated.
-- **Extraction:** PDF text extraction and visual transcription can misread equations, tables, scans or unusual fonts. Citations help verify an answer; they do not guarantee accuracy.
-- **EPUB:** text follows the book's reading order with chapter references, not fixed page numbers. Original layouts and images are not reproduced. DRM/encrypted chapters and image-only books are unsupported.
-- **Retrieval:** exact vector search with keyword rank fusion is intended for personal collections. There is no reranker, and large-library or broad multilingual quality has not been benchmarked.
-- **Context:** a conservative budget targets an 8K context, so excerpts and recent history may be shortened. Loading a larger model context does not automatically increase the app's budget.
+- **Platform:** Windows x64 with an NVIDIA GPU; the portable build is unsigned. Other platforms are untested.
+- **Extraction:** PDF text extraction and visual transcription can misread equations, tables, scans or unusual fonts. Citations help verify an answer but do not guarantee it.
+- **EPUB:** text follows reading order with chapter references, not page numbers; layout and images are not reproduced. DRM-protected and image-only books are unsupported.
+- **Whole-book questions:** retrieval returns passages, so summaries of a book, timelines and character arcs across volumes are incomplete.
+- **Context:** the prompt targets an 8K context; loading a larger context does not raise the app's budget.
+
+## Troubleshooting
+
+- **`npm start` fails with "running scripts is disabled":** use `npm.cmd start` or `Start Local RAG.cmd`.
+- **Electron exits immediately (code 0x80000003):** the repository folder probably has a Low integrity label, which some sandboxing tools add; Chromium's sandbox cannot start under it. Reset it with `icacls "<repository folder>" /setintegritylevel "(OI)(CI)medium"`.
+- **A model will not load:** check the `llama-*.log` files in the library folder and **Settings → Models**.
 
 ## Development
 
 ```text
-Electron renderer → authenticated local FastAPI backend
-                         ├─ PDF / EPUB extraction and folder monitoring
-                         ├─ SQLite: documents, vectors and conversations
-                         └─ LM Studio: embeddings, answers and PDF vision
+React UI (Electron window) → authenticated local FastAPI backend
+                               ├─ PDF / EPUB extraction and folder sync
+                               ├─ SQLite: documents, passages, vectors, FTS5 keywords, chats
+                               └─ llama-server ×3: answers + PDF vision, embeddings, reranking
 ```
 
-The desktop implementation lives in `desktop/` and `backend/`. Imports run through one background worker; one answer is generated at a time.
+| Folder | Contents |
+| --- | --- |
+| `frontend/` | React + TypeScript + Tailwind UI, built by Vite into `frontend/dist` |
+| `backend/` | FastAPI server, library and retrieval (`core.py`), prompt assembly, folder sync, `llama-server` runtime (`llama.py`) |
+| `desktop/` | Electron main process and preload bridge |
+| `scripts/` | Runtime bundling, packaging and the retrieval benchmark |
+| `tests/` | Python tests and end-to-end tests (`tests/e2e/`) |
+
+Imports and index rebuilds run on one background worker; one answer is generated at a time. `npm.cmd start` builds the UI, then opens Electron.
+
+For UI work with hot reload, run a backend with a fixed port and token, then the Vite dev server, which proxies `/api` and adds the token:
+
+```powershell
+$env:LOCAL_RAG_TOKEN = 'dev'; .venv\Scripts\python.exe -m backend.server --data-dir artifacts\dev-library --port 8765
+npm.cmd run dev:ui
+```
+
+Open `http://localhost:5173`. Connecting folders needs the Electron app; files can be dropped onto the page.
 
 ### Tests
-
-After setup:
 
 ```powershell
 uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q
-npm test
+npm.cmd test
 ```
 
-Python tests cover persistence, imports, category scope, folder updates, embedding lifecycle and prompt limits. `npm test` checks JavaScript syntax.
+Python tests cover persistence, imports, scope rules, folder sync, keyword indexing, reranking, index rebuilds, the llama.cpp runtime, model memory and prompt budgets. `npm test` type-checks the UI and checks the Electron scripts.
 
-For integration tests, start LM Studio with the configured models. The category test also needs Playwright's Chromium browser:
+End-to-end tests need the default models in `models/` and a built UI (`npm.cmd run build:ui`):
 
 ```powershell
-npx playwright install chromium
-node tests/electron-smoke.cjs --live
-node tests/electron-folders.cjs --live
-node tests/electron-categories.cjs --live
+node tests/e2e/smoke.cjs --live
+node tests/e2e/folders.cjs --live
+node tests/e2e/categories.cjs --live
+node tests/e2e/memory.cjs
 ```
 
-Tests generate fictional PDF/EPUB fixtures and use isolated libraries under `artifacts/`. `--live` checks generated answers as well as imports and UI behavior. Add `--packaged` to test a built executable. These are functional checks, not a general answer-quality benchmark.
+They create fictional PDF/EPUB fixtures and isolated libraries under `artifacts/`; `--live` also checks generated answers. Add `--packaged` to test the portable build, or `--browser` to run against the backend in headless Chromium (`npx playwright install chromium`).
 
 ### Portable build
 
 ```powershell
 .venv\Scripts\python.exe scripts\prepare_runtime.py
-npm run pack
+npm.cmd run pack
 ```
 
-Output: `dist/Local-RAG-win32-x64/`. Packaging replaces the previous output, so close that executable first. `LOCAL_RAG_PYTHON` overrides the runtime; `LOCAL_RAG_DATA_DIR` overrides the library location.
-
-### Legacy CLI
-
-`rag_system.py` contains the earlier MinerU, Sentence Transformers and Annoy/FAISS pipeline. It uses `requirements.txt`, `config.yaml` and a separate `data/` directory, and requires its own dependency environment. It is not the desktop backend. `rag_system_useless.py` is a historical reference.
-
-The CLI supports `--action build`, `query`, `add` and `clear`; run `python rag_system.py --help` in that environment for options. Older FAISS stores using `documents.pkl` must be rebuilt for the current `faiss_documents.pkl` metadata path.
+Output: `dist/Local-RAG-win32-x64/` (about 1.2 GB, mostly CUDA libraries). It includes Python, the backend and llama.cpp; put the `models/` folder next to `Local-RAG.exe`. Close the executable before packaging again. `LOCAL_RAG_PYTHON`, `LOCAL_RAG_DATA_DIR`, `LOCAL_RAG_MODELS_DIR` and `LOCAL_RAG_LLAMA_SERVER` override the runtime, library folder, models folder and `llama-server.exe` path.

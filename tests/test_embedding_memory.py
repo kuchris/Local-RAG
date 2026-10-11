@@ -1,4 +1,3 @@
-import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -6,109 +5,114 @@ import httpx
 import pytest
 
 from backend.core import DEFAULTS, ModelClient
-from backend.embedding_memory import EmbeddingMemory
 
 
-class Server:
+class Runtime:
+    """Stands in for LlamaRuntime: tracks whether the embedding server is running."""
     def __init__(self):
-        self.instances = ['custom-embedding']
+        self.running = None
+        self.starts = 0
+        self.fail_stop = False
         self.calls = []
-        self.fail_unload = False
 
-    def get(self, url, **kwargs):
-        return httpx.Response(200, request=httpx.Request('GET', url), json={'models': [
-            {'type': 'llm', 'key': 'qwen3.5-9b', 'loaded_instances': [{'id': 'qwen3.5-9b'}]},
-            {'type': 'embedding', 'key': 'embedding-key', 'loaded_instances': [{'id': i} for i in self.instances]},
-        ]})
+    def ensure(self, role, model_id):
+        assert role == 'embedding'
+        if self.running != model_id:
+            self.running = model_id
+            self.starts += 1
+        return 'http://embedding', {'Authorization': 'Bearer key'}
 
-    def post(self, url, json, **kwargs):
-        self.calls.append((url, json))
-        status, data = 200, {}
-        if url.endswith('/load'):
-            self.instances = ['embedding-key']
-            data = {'type': 'embedding', 'instance_id': 'embedding-key'}
-        elif url.endswith('/unload'):
-            if self.fail_unload:
-                status = 503
-            else:
-                self.instances.remove(json['instance_id'])
-        elif url.endswith('/embeddings'):
-            data = {'data': [{'index': i, 'embedding': [3, 4]} for i, _ in enumerate(json['input'])]}
-        return httpx.Response(status, request=httpx.Request('POST', url), json=data)
+    def loaded(self, role):
+        return self.running
+
+    def stop(self, role):
+        if self.fail_stop:
+            raise RuntimeError('stop failed')
+        self.running = None
+
+    def close(self):
+        self.running = None
 
 
 @pytest.fixture
 def client(monkeypatch):
-    server = Server()
-    monkeypatch.setattr(httpx, 'get', server.get)
-    monkeypatch.setattr(httpx, 'post', server.post)
-    client = ModelClient()
+    runtime = Runtime()
+
+    def post(url, json, headers, **kwargs):
+        runtime.calls.append((url, json, headers))
+        data = {'data': [{'index': i, 'embedding': [3, 4]} for i, _ in enumerate(json['input'])]}
+        return httpx.Response(200, request=httpx.Request('POST', url), json=data)
+
+    monkeypatch.setattr(httpx, 'post', post)
+    client = ModelClient(runtime)
     now = [0]
     client.memory.clock = lambda: now[0]
-    return client, server, now, DEFAULTS | {'embedding_model': 'custom-embedding'}
+    return client, runtime, now, DEFAULTS | {'embedding_model': 'Qwen3-Embedding-0.6B-Q8_0'}
 
 
-def test_idle_unload_preserves_llm_and_reloads_custom_alias(client):
-    client, server, now, settings = client
+def test_idle_stop_and_restart_on_next_embedding(client):
+    client, runtime, now, settings = client
     first = client.embed(['a'], settings)
     now[0] = 29
     client.memory.release_idle()
-    assert server.instances == ['custom-embedding']
+    assert runtime.running
     now[0] = 30
     client.memory.release_idle()
-    assert server.instances == []
+    assert runtime.running is None
     second = client.embed(['query'], settings, query=True)
     assert (first == second).all()
-    assert server.instances == ['embedding-key']
-    assert next(body for url, body in server.calls if url.endswith('/unload')) == {'instance_id': 'custom-embedding'}
-    assert next(body for url, body in server.calls if url.endswith('/load'))['model'] == 'embedding-key'
+    assert runtime.starts == 2
+    url, body, headers = runtime.calls[-1]
+    assert url == 'http://embedding/v1/embeddings' and headers['Authorization'] == 'Bearer key'
+    assert body['input'][0].startswith('Instruct: ') and runtime.calls[0][1]['input'] == ['a']
 
 
 def test_import_session_retains_between_batches_and_resets_idle(client):
-    client, server, now, settings = client
+    client, runtime, now, settings = client
     with client.memory.session():
         client.embed(['batch 1'], settings)
         now[0] = 100
         client.memory.release_idle(force=True)
-        assert server.instances
+        assert runtime.running
         client.embed(['batch 2'], settings)
     now[0] = 129
     client.memory.release_idle()
-    assert server.instances
+    assert runtime.running
     now[0] = 130
     client.memory.release_idle()
-    assert not server.instances
+    assert not runtime.running
 
 
-def test_disabled_preference_failure_and_retry_leave_vectors_valid(client):
-    client, server, now, settings = client
+def test_disabled_preference_failure_and_retry(client):
+    client, runtime, now, settings = client
     client.embed(['text'], settings)
     client.memory.configure(settings | {'embedding_idle_unload': False})
     now[0] = 100
     client.memory.release_idle(force=True)
-    assert server.instances
+    assert runtime.running
     client.memory.configure(settings)
-    server.fail_unload = True
+    runtime.fail_stop = True
     now[0] = 130
     client.memory.release_idle()
     assert client.memory.error
-    assert server.instances
-    server.fail_unload = False
+    assert runtime.running
+    runtime.fail_stop = False
     now[0] = 160
     client.memory.release_idle()
-    assert not server.instances
+    assert not runtime.running
     assert client.memory.error is None
 
 
-def test_unload_cannot_interrupt_an_inflight_embedding(client, monkeypatch):
-    client, server, now, settings = client
+def test_stop_cannot_interrupt_an_inflight_embedding(client, monkeypatch):
+    client, runtime, now, settings = client
     entered, finish = threading.Event(), threading.Event()
-    original = server.post
+    original = httpx.post
+
     def slow_post(url, **kwargs):
-        if url.endswith('/embeddings'):
-            entered.set()
-            assert finish.wait(3)
+        entered.set()
+        assert finish.wait(3)
         return original(url, **kwargs)
+
     monkeypatch.setattr(httpx, 'post', slow_post)
     with ThreadPoolExecutor(max_workers=2) as pool:
         embedding = pool.submit(client.embed, ['slow request'], settings)
@@ -118,13 +122,13 @@ def test_unload_cannot_interrupt_an_inflight_embedding(client, monkeypatch):
         finish.set()
         assert embedding.result(timeout=3).shape == (1, 2)
         cleanup.result(timeout=3)
-    assert not server.instances
+    assert not runtime.running
 
 
-def test_unsupported_management_api_keeps_embedding_working(client, monkeypatch):
-    client, server, now, settings = client
-    monkeypatch.setattr(httpx, 'get', lambda url, **kw: httpx.Response(404))
-    assert client.embed(['text'], settings).shape == (1, 2)
-    client.memory.release_idle(force=True)
-    assert server.instances
-    assert client.memory.error
+def test_embeddinggemma_prefixes(client):
+    client, runtime, now, settings = client
+    settings = settings | {'embedding_model': 'embeddinggemma-2-Q8_0'}
+    client.embed(['passage'], settings)
+    client.embed(['question'], settings, query=True)
+    assert runtime.calls[0][1]['input'] == ['title: none | text: passage']
+    assert runtime.calls[1][1]['input'] == ['task: search result | query: question']

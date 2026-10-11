@@ -8,7 +8,9 @@ __pycache__/
 *.pyc
 /.local-rag/
 /runtime/
-/desktop/renderer/vendor/
+/bin/
+/models/
+*.gguf
 
 # Personal libraries, imported documents and generated indexes
 /data/
@@ -32,3 +34,4 @@ __pycache__/
 *.pem
 *.key
 config.local.*
+/frontend/dist/
