@@ -28,15 +28,17 @@ The app starts and stops [llama.cpp](https://github.com/ggml-org/llama.cpp) `lla
 ```text
 models/
   Qwen3.5-9B/            Qwen3.5-9B-Q4_K_M.gguf, mmproj-F32.gguf
-  EmbeddingGemma-2/     embeddinggemma-2-Q8_0.gguf
+  EmbeddingGemma-2/      embeddinggemma-2-Q8_0.gguf
+  bge-reranker-v2-m3/    bge-reranker-v2-m3-Q8_0.gguf
 ```
 
 | Purpose | Default model ID (file name without `.gguf`) |
 | --- | --- |
 | Answers | `Qwen3.5-9B-Q4_K_M` |
 | Embeddings | `embeddinggemma-2-Q8_0` ([ggml-org/embeddinggemma-2-GGUF](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF)) |
+| Reranking (optional) | `bge-reranker-v2-m3-Q8_0` ([gpustack/bge-reranker-v2-m3-GGUF](https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF)) |
 
-- A file whose name contains `embedding` is treated as an embedding model; anything else is an answer model.
+- A file whose name contains `rerank` is a reranker, one containing `embedding` an embedding model; anything else is an answer model.
 - An `mmproj*.gguf` in the same subfolder is the model's vision projector, used to transcribe scanned PDF pages.
 - File names must be unique across subfolders. Choose models in **Settings**.
 
@@ -123,7 +125,7 @@ The backend uses a random loopback port with a per-launch session secret. The re
 - **Platform:** the portable build targets Windows x64 and is unsigned. Other platforms have not been validated.
 - **Extraction:** PDF text extraction and visual transcription can misread equations, tables, scans or unusual fonts. Citations help verify an answer; they do not guarantee accuracy.
 - **EPUB:** text follows the book's reading order with chapter references, not fixed page numbers. Original layouts and images are not reproduced. DRM/encrypted chapters and image-only books are unsupported.
-- **Retrieval:** exact vector search with keyword rank fusion is intended for personal collections. There is no reranker, and large-library or broad multilingual quality has not been benchmarked.
+- **Retrieval:** exact vector search fused with BM25 keyword ranking, then an optional reranker over the top 30 passages, intended for personal collections. `scripts/eval_retrieval.py` measures recall on your own library with generated questions; it is a regression check for local passage lookup, not a benchmark of whole-book questions.
 - **Context:** a conservative budget targets an 8K context, so excerpts and recent history may be shortened. Loading a larger model context does not automatically increase the app's budget.
 
 ## Development

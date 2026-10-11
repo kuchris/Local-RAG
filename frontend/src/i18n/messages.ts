@@ -226,6 +226,13 @@ export const messages = {
   "settings.reindexDone": ["索引已重建，已切換到 {model}。", "Index rebuilt; now using {model}.", "索引を再構築し、{model} に切り替えました。"],
   "settings.reindexFailed": ["重建失敗，仍使用原本的索引：{error}", "Rebuild failed; the previous index is still in use: {error}", "再構築に失敗しました。元の索引を使用しています：{error}"],
   "status.reindexing": ["重建索引 {percent}%", "Rebuilding index {percent}%", "索引再構築 {percent}%"],
+  "settings.reranker": ["Reranker", "Reranker", "リランカー"],
+  "settings.rerankerOff": ["關閉", "Off", "オフ"],
+  "settings.rerankerHint": [
+    "先用混合檢索找出 30 段候選，再由 reranker 逐段判斷相關性並重新排序。比較準，每次提問約多 0.4 秒。",
+    "Hybrid search finds 30 candidate passages; the reranker then scores each against the question and reorders them. More accurate, about 0.4 s more per question.",
+    "ハイブリッド検索で 30 件の候補を探し、リランカーが質問との関連性を判定して並べ替えます。精度が上がり、質問ごとに約 0.4 秒増えます。",
+  ],
   "settings.vision": ["可讀掃描頁", "Reads scans", "スキャン対応"],
   "settings.loaded": ["已載入", "Loaded", "読み込み済み"],
   "settings.missing": ["（找不到）", "(missing)", "（見つかりません）"],

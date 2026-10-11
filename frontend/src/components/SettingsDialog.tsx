@@ -42,6 +42,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const catalog = models?.catalog ?? [];
   const answers = catalog.filter((m) => m.type === "llm");
   const embeddings = catalog.filter((m) => m.type === "embedding");
+  const rerankers = catalog.filter((m) => m.type === "reranker");
   // With documents, a different embedding model is applied by rebuilding the index, not by saving.
   const needsReindex = documents.length > 0 && !!saved && form.embedding_model !== saved.embedding_model;
 
@@ -145,6 +146,16 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                     </Button>
                   </div>
                 )}
+                <Label hint={t("settings.rerankerHint")}>{t("settings.reranker")}</Label>
+                <NativeSelect value={form.reranker_model} onChange={(e) => set("reranker_model", e.target.value)} className="-mt-3" data-testid="reranker-model">
+                  <option value="">{t("settings.rerankerOff")}</option>
+                  {form.reranker_model && ensure(rerankers, form.reranker_model)}
+                  {rerankers.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {option(m)}
+                    </option>
+                  ))}
+                </NativeSelect>
                 <Label>{t("settings.idle")}</Label>
                 <NativeSelect
                   value={String(form.embedding_idle_unload)}

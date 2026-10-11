@@ -105,6 +105,7 @@ def main():
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--regenerate", action="store_true", help="write a new question set (breaks comparability)")
     parser.add_argument("--note", default="", help="what changed since the last run")
+    parser.add_argument("--reranker", help="reranker model ID to use instead of the saved setting; empty string = off")
     args = parser.parse_args()
 
     folder = args.data_dir / "eval"
@@ -114,6 +115,8 @@ def main():
     library = Library(args.data_dir, ModelClient(runtime))
     try:
         settings = library.settings()
+        if args.reranker is not None:
+            settings["reranker_model"] = args.reranker
         if args.regenerate or not question_file.exists():
             questions = generate(library, runtime, settings, args.questions, args.seed)
             question_file.write_text(json.dumps(questions, ensure_ascii=False, indent=2), "utf-8")
@@ -136,13 +139,14 @@ def main():
                    for name, items in groups.items() if items}
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
         record = {"time": time.strftime("%Y-%m-%d %H:%M"), "commit": commit, "note": args.note,
-                  "embedding_model": settings["embedding_model"], "chunks": len(cache.get("ids", [])),
+                  "embedding_model": settings["embedding_model"], "reranker_model": settings.get("reranker_model") or None,
+                  "chunks": len(cache.get("ids", [])),
                   "seconds_per_query": round(elapsed / max(1, len(questions)), 3), "metrics": metrics}
         with open(folder / "results.jsonl", "a", encoding="utf-8") as output:
             output.write(json.dumps(record, ensure_ascii=False) + "\n")
         (folder / "last-run.json").write_text(json.dumps(per_question, ensure_ascii=False, indent=2), "utf-8")
 
-        print(f"\n{record['embedding_model']} · {record['chunks']} passages · {len(questions)} questions · "
+        print(f"\n{record['embedding_model']} + reranker {record['reranker_model']} · {record['chunks']} passages · {len(questions)} questions · "
               f"{record['seconds_per_query']} s/query · commit {commit}")
         print(f"{'':16}{'method':22}{'R@1':>7}{'R@5':>7}{'R@10':>7}{'MRR':>7}")
         for name, block in metrics.items():

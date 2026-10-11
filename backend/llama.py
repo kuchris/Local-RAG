@@ -59,8 +59,9 @@ def scan(models_dir: Path) -> dict[str, Model]:
         identifier = path.stem
         if identifier in models:
             duplicates.add(identifier)
-        models[identifier] = Model(identifier, path, 'embedding' if 'embedding' in identifier.lower() else 'llm',
-                                   projectors[0] if projectors else None, path.stat().st_size)
+        lowered = identifier.lower()
+        kind = 'reranker' if 'rerank' in lowered else 'embedding' if 'embedding' in lowered else 'llm'
+        models[identifier] = Model(identifier, path, kind, projectors[0] if projectors else None, path.stat().st_size)
     if duplicates:
         raise ValueError('models 資料夾有重複的模型檔名：' + ', '.join(sorted(duplicates)))
     return models
@@ -134,7 +135,7 @@ class LlamaRuntime:
     def __init__(self, models_dir: Path, server: Path, log_dir: Path):
         self.models_dir, self.server, self.log_dir = Path(models_dir), Path(server), Path(log_dir)
         self.instances: dict[str, _Instance] = {}
-        self.locks = {'chat': threading.Lock(), 'embedding': threading.Lock()}
+        self.locks = {'chat': threading.Lock(), 'embedding': threading.Lock(), 'rerank': threading.Lock()}
         self.job = _Job()
 
     def available(self):
@@ -156,6 +157,9 @@ class LlamaRuntime:
             # Each input is one sequence; a slot must hold a whole ~900-character chunk plus prefix.
             args += ['--embedding', '-c', str(CONTEXT), '-np', '4', '-b', '2048', '-ub', '2048']
             args += profile(model.id)['args']
+        elif role == 'rerank':
+            # Each (question, passage) pair is one sequence; encoder rerankers need it in one ubatch.
+            args += ['--reranking', '-c', str(4 * 4096), '-np', '4', '-b', '4096', '-ub', '4096']
         else:
             args += ['-c', str(CONTEXT), '-np', '1', '--jinja']
             args += ['--mmproj', str(model.mmproj)] if model.mmproj else ['--no-mmproj']
@@ -172,6 +176,8 @@ class LlamaRuntime:
             model = self.model(model_id)
             if role == 'embedding' and model.type != 'embedding':
                 raise ValueError('設定的 embedding 模型不是 embedding 模型。')
+            if role == 'rerank' and model.type != 'reranker':
+                raise ValueError('設定的 reranker 不是 reranker 模型。')
             port, key = free_port(), secrets.token_hex(16)
             self.log_dir.mkdir(parents=True, exist_ok=True)
             log_path = self.log_dir / f'llama-{role}.log'

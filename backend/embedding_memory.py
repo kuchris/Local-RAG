@@ -1,4 +1,4 @@
-"""Serialize embedding requests and stop the embedding server when idle, retaining whole import jobs."""
+"""Serialize retrieval-model requests and stop the embedding and reranker servers when idle, retaining whole import jobs."""
 from contextlib import contextmanager
 import logging
 import threading
@@ -53,7 +53,7 @@ class EmbeddingMemory:
         return endpoint
 
     def touch(self):
-        if self.runtime.loaded('embedding'):
+        if self.runtime.loaded('embedding') or self.runtime.loaded('rerank'):
             self.last_used = self.clock()
 
     def release_idle(self, force=False):
@@ -64,6 +64,7 @@ class EmbeddingMemory:
                 return
             try:
                 self.runtime.stop('embedding')
+                self.runtime.stop('rerank')
                 self.last_used = None
                 self.error = None
             except Exception as error:

@@ -30,10 +30,13 @@ LEGACY_MODELS = {
 
 # Weight of the keyword (BM25) ranking relative to the vector ranking in reciprocal rank fusion.
 LEXICAL_WEIGHT = 1.0
+# How many of the best hybrid-search passages the reranker reorders.
+RERANK_CANDIDATES = 30
 
 DEFAULTS = {
     "model": "Qwen3.5-9B-Q4_K_M",
     "embedding_model": "embeddinggemma-2-Q8_0",
+    "reranker_model": "bge-reranker-v2-m3-Q8_0",
     "top_k": 5,
     "max_tokens": 1200,
     "temperature": 0.2,
@@ -148,6 +151,21 @@ class ModelClient:
         if np.any(norms == 0):
             raise ValueError("Embedding server returned an empty vector")
         return vectors / norms
+
+    def rerank(self, query: str, texts: list[str], settings: dict) -> np.ndarray:
+        """Relevance score per passage (higher is better), from the reranker server."""
+        with self.memory.lock:
+            url, headers = self.runtime.ensure('rerank', settings['reranker_model'])
+            try:
+                response = httpx.post(url + "/v1/rerank", headers=headers, timeout=180, trust_env=False,
+                                      json={"model": settings['reranker_model'], "query": query, "documents": texts})
+                response.raise_for_status()
+            finally:
+                self.memory.touch()
+        scores = np.full(len(texts), -np.inf)
+        for item in response.json()["results"]:
+            scores[item["index"]] = item["relevance_score"]
+        return scores
 
     def close(self):
         self.memory.close()
@@ -537,7 +555,12 @@ class Library:
             if values is lexical:
                 order = order[values[order] > 0]
             scores[order] += weight / (60 + np.arange(1, len(order) + 1))
-        selected = np.argsort(-scores)[:settings["top_k"]]
+        order = np.argsort(-scores)
+        if settings.get("reranker_model") and hasattr(self.client, "rerank"):
+            candidates = order[:RERANK_CANDIDATES]
+            relevance = self.client.rerank(question, [rows[i]["text"] for i in candidates], settings)
+            order = np.concatenate([candidates[np.argsort(-relevance, kind="stable")], order[RERANK_CANDIDATES:]])
+        selected = order[:settings["top_k"]]
         sources = [{"id": rank, "chunk_id": rows[i]["id"], "document_id": rows[i]["document_id"],
                  "name": rows[i]["name"], "page": rows[i]["page"], "text": rows[i]["text"],
                  "format": rows[i]['format'], "location": rows[i]['title'] if rows[i]['format'] == 'epub' else f"第 {rows[i]['page']} 頁",

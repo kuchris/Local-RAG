@@ -76,3 +76,13 @@ def test_lm_studio_settings_migrate_to_file_identifiers(tmp_path):
     assert settings['embedding_model'] == 'Qwen3-Embedding-0.6B-Q8_0'
     assert library.document('d')['embedding_model'] == 'Qwen3-Embedding-0.6B-Q8_0'
     library.close()
+
+
+def test_rerankers_are_their_own_type_and_role(tmp_path):
+    gguf(tmp_path / 'r' / 'bge-reranker-v2-m3-Q8_0.gguf')
+    gguf(tmp_path / 'e' / 'embeddinggemma-2-Q8_0.gguf')
+    runtime = LlamaRuntime(tmp_path, tmp_path / 'llama-server.exe', tmp_path)
+    reranker = runtime.model('bge-reranker-v2-m3-Q8_0')
+    assert reranker.type == 'reranker'
+    assert '--reranking' in runtime.arguments('rerank', reranker, 5002, 'k')
+    assert runtime.model('embeddinggemma-2-Q8_0').type == 'embedding'

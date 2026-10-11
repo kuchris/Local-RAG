@@ -27,6 +27,7 @@ from backend.folders import FolderSync
 class Settings(BaseModel):
     model: str = Field(default="Qwen3.5-9B-Q4_K_M", min_length=1, max_length=200)
     embedding_model: str = Field(default="embeddinggemma-2-Q8_0", min_length=1, max_length=200)
+    reranker_model: str = Field(default="bge-reranker-v2-m3-Q8_0", max_length=200)  # empty = off
     top_k: int = Field(default=5, ge=1, le=6)
     max_tokens: int = Field(default=1200, ge=100, le=2000)
     temperature: float = Field(default=0.2, ge=0, le=1)

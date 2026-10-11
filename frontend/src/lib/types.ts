@@ -75,6 +75,8 @@ export interface Message {
 export interface Settings {
   model: string;
   embedding_model: string;
+  /** Empty when the reranker is off. */
+  reranker_model: string;
   top_k: number;
   max_tokens: number;
   temperature: number;
@@ -84,7 +86,7 @@ export interface Settings {
 export interface ModelEntry {
   id: string;
   name: string;
-  type: "llm" | "embedding";
+  type: "llm" | "embedding" | "reranker";
   loaded: boolean;
   vision: boolean;
   size: number;

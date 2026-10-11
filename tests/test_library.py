@@ -243,3 +243,24 @@ def test_keyword_index_is_backfilled_for_existing_libraries(tmp_path):
     library = Library(tmp_path, DeterministicEmbeddings())
     assert library.keyword_scores('orchid')[0]
     library.close()
+
+
+def test_reranker_reorders_hybrid_candidates(tmp_path):
+    class Reranking(DeterministicEmbeddings):
+        calls = []
+
+        def rerank(self, query, texts, settings):
+            self.calls.append(len(texts))
+            # Prefer the passage about timers even though vectors and keywords favour Orchid.
+            return np.array([1.0 if 'Timer' in t else 0.0 for t in texts])
+
+    client = Reranking()
+    library = Library(tmp_path, client)
+    wait_ready(library, library.enqueue('a.pdf', pdf_bytes('Orchid budget is 4200.'))['id'])
+    wait_ready(library, library.enqueue('b.pdf', pdf_bytes('Timer A measured 7.4 ms.'))['id'])
+    settings = library.settings()
+    assert library.retrieve('orchid', None, settings | {'reranker_model': ''})[0]['text'].startswith('Orchid')
+    assert not client.calls
+    assert library.retrieve('orchid', None, settings | {'reranker_model': 'bge'})[0]['text'].startswith('Timer')
+    assert client.calls == [2]
+    library.close()
